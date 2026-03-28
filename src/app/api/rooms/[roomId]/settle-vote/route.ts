@@ -7,6 +7,8 @@ type RoomRow = {
   round_number: number;
   vote_round: number;
   vote_duration_seconds: number;
+  vote_started_at: string | null;
+  vote_deadline_at: string | null;
   vote_candidate_ids: string[] | null;
 };
 
@@ -23,10 +25,6 @@ type VoteRow = {
   target_player_id: string;
 };
 
-const clamp = (value: number, min: number, max: number) => {
-  return Math.min(Math.max(value, min), max);
-};
-
 const detectWinner = (players: PlayerRow[]) => {
   const aliveUndercover = players.filter((player) => player.is_alive && player.is_undercover).length;
   const aliveCivilian = players.filter((player) => player.is_alive && !player.is_undercover).length;
@@ -34,10 +32,6 @@ const detectWinner = (players: PlayerRow[]) => {
   if (aliveUndercover === 0) return "平民" as const;
   if (aliveUndercover >= aliveCivilian) return "卧底" as const;
   return null;
-};
-
-const makeDeadlineIso = (seconds: number) => {
-  return new Date(Date.now() + seconds * 1000).toISOString();
 };
 
 export async function POST(
@@ -54,7 +48,9 @@ export async function POST(
 
     const roomRes = await supabaseAdmin
       .from("rooms")
-      .select("id, status, round_number, vote_round, vote_duration_seconds, vote_candidate_ids")
+      .select(
+        "id, status, round_number, vote_round, vote_duration_seconds, vote_started_at, vote_deadline_at, vote_candidate_ids",
+      )
       .eq("id", roomId)
       .maybeSingle();
 
@@ -98,6 +94,11 @@ export async function POST(
         : alivePlayers.map((player) => player.id);
 
     const scopeSet = new Set(scopeIds);
+    const isTieBreakRound = scopeIds.length > 0 && scopeIds.length < alivePlayers.length;
+    const voterScopeIds = isTieBreakRound
+      ? alivePlayers.filter((player) => !scopeSet.has(player.id)).map((player) => player.id)
+      : alivePlayers.map((player) => player.id);
+    const voterScopeSet = new Set(voterScopeIds);
 
     const votesRes = await supabaseAdmin
       .from("votes")
@@ -112,21 +113,32 @@ export async function POST(
 
     const rawVotes = (votesRes.data ?? []) as VoteRow[];
     const votes = rawVotes.filter(
-      (vote) => aliveSet.has(vote.voter_player_id) && scopeSet.has(vote.target_player_id),
+      (vote) => voterScopeSet.has(vote.voter_player_id) && scopeSet.has(vote.target_player_id),
     );
 
-    const duration = clamp(room.vote_duration_seconds ?? 60, 15, 600);
+    const uniqueVoters = new Set(votes.map((vote) => vote.voter_player_id)).size;
+    const allVoted = voterScopeIds.length > 0 && uniqueVoters >= voterScopeIds.length;
+    const deadlineReached =
+      !!room.vote_deadline_at && Date.now() >= Date.parse(room.vote_deadline_at);
+
+    if (!allVoted && !deadlineReached) {
+      return NextResponse.json({
+        ok: true,
+        action: "noop",
+        reason: "waiting-for-deadline-or-all-votes",
+      });
+    }
 
     if (votes.length === 0) {
-      const tieRes = await supabaseAdmin
+      const pendingRes = await supabaseAdmin
         .from("rooms")
         .update({
-          status: "voting",
+          status: "playing",
           vote_round: room.vote_round + 1,
-          vote_started_at: new Date().toISOString(),
-          vote_deadline_at: makeDeadlineIso(duration),
+          vote_started_at: null,
+          vote_deadline_at: null,
           vote_candidate_ids: scopeIds,
-          result_summary: `第 ${room.vote_round} 轮无人投票，发起加赛。`,
+          result_summary: `第 ${room.vote_round} 轮无人投票。请继续描述，由房主开启第 ${room.vote_round + 1} 轮投票。`,
         })
         .eq("id", room.id)
         .eq("status", "voting")
@@ -135,15 +147,15 @@ export async function POST(
         .select("id")
         .maybeSingle();
 
-      if (tieRes.error) {
-        return NextResponse.json({ error: tieRes.error.message }, { status: 500 });
+      if (pendingRes.error) {
+        return NextResponse.json({ error: pendingRes.error.message }, { status: 500 });
       }
 
-      if (!tieRes.data) {
+      if (!pendingRes.data) {
         return NextResponse.json({ ok: true, action: "noop", reason: "already-settled" });
       }
 
-      return NextResponse.json({ ok: true, action: "revote-no-votes" });
+      return NextResponse.json({ ok: true, action: "revote-no-votes-pending" });
     }
 
     const counter = new Map<string, number>();
@@ -157,15 +169,20 @@ export async function POST(
       .map(([key]) => key);
 
     if (candidates.length > 1) {
+      const tiedPlayerNames = players
+        .filter((player) => candidates.includes(player.id))
+        .map((player) => `#${player.seat_no} ${player.name}`)
+        .join("、");
+
       const tieRes = await supabaseAdmin
         .from("rooms")
         .update({
-          status: "voting",
+          status: "playing",
           vote_round: room.vote_round + 1,
-          vote_started_at: new Date().toISOString(),
-          vote_deadline_at: makeDeadlineIso(duration),
+          vote_started_at: null,
+          vote_deadline_at: null,
           vote_candidate_ids: candidates,
-          result_summary: `第 ${room.vote_round} 轮平票（${candidates.length} 人），已进入加赛投票。`,
+          result_summary: `第 ${room.vote_round} 轮平票：${tiedPlayerNames}。请继续描述，由房主开启第 ${room.vote_round + 1} 轮加赛投票。`,
         })
         .eq("id", room.id)
         .eq("status", "voting")
@@ -182,7 +199,7 @@ export async function POST(
         return NextResponse.json({ ok: true, action: "noop", reason: "already-settled" });
       }
 
-      return NextResponse.json({ ok: true, action: "revote-tie" });
+      return NextResponse.json({ ok: true, action: "revote-tie-pending", candidates });
     }
 
     const eliminatedId = candidates[0];

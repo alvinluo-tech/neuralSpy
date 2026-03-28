@@ -507,6 +507,15 @@ export default function Home() {
     return alivePlayers.filter((player) => scope.has(player.id));
   }, [alivePlayers, room?.vote_candidate_ids]);
 
+  const eligibleVoters = useMemo(() => {
+    if (!room?.vote_candidate_ids || room.vote_candidate_ids.length === 0) {
+      return alivePlayers;
+    }
+
+    const candidateSet = new Set(room.vote_candidate_ids);
+    return alivePlayers.filter((player) => !candidateSet.has(player.id));
+  }, [alivePlayers, room?.vote_candidate_ids]);
+
   const voteDeadlineMs = useMemo(() => {
     if (!room?.vote_deadline_at) return null;
     const parsed = Date.parse(room.vote_deadline_at);
@@ -519,8 +528,20 @@ export default function Home() {
   }, [voteDeadlineMs, nowMs]);
 
   const votedCount = useMemo(() => {
-    return new Set(votes.map((vote) => vote.voter_player_id)).size;
-  }, [votes]);
+    const eligibleSet = new Set(eligibleVoters.map((player) => player.id));
+    return new Set(votes.filter((vote) => eligibleSet.has(vote.voter_player_id)).map((vote) => vote.voter_player_id)).size;
+  }, [votes, eligibleVoters]);
+
+  const canCurrentPlayerVote = useMemo(() => {
+    if (!currentPlayer || !currentPlayer.is_alive) return false;
+    return eligibleVoters.some((player) => player.id === currentPlayer.id);
+  }, [currentPlayer, eligibleVoters]);
+
+  const tieCandidatePlayers = useMemo(() => {
+    if (!room?.vote_candidate_ids || room.vote_candidate_ids.length === 0) return [] as PlayerRow[];
+    const set = new Set(room.vote_candidate_ids);
+    return alivePlayers.filter((player) => set.has(player.id));
+  }, [room?.vote_candidate_ids, alivePlayers]);
 
   const rotatedPlayers = useMemo(() => {
     if (players.length <= 1) return players;
@@ -854,8 +875,11 @@ export default function Home() {
         status: "voting",
         vote_started_at: now.toISOString(),
         vote_deadline_at: deadline,
-        vote_candidate_ids: null,
-        result_summary: `第 ${room.vote_round} 轮投票进行中（限时 ${duration} 秒）`,
+        vote_candidate_ids: room.vote_candidate_ids,
+        result_summary:
+          room.vote_candidate_ids && room.vote_candidate_ids.length > 0
+            ? `第 ${room.vote_round} 轮加赛投票进行中（限时 ${duration} 秒，仅非平票玩家可投票）`
+            : `第 ${room.vote_round} 轮投票进行中（限时 ${duration} 秒）`,
       })
       .eq("id", room.id);
 
@@ -871,6 +895,11 @@ export default function Home() {
   const castVote = async () => {
     if (!room || !currentPlayer || !voteTargetId) {
       setError("请选择投票目标。");
+      return;
+    }
+
+    if (!canCurrentPlayerVote) {
+      setError("当前加赛轮次中，平票玩家不能投票。请等待其他存活玩家投票。");
       return;
     }
 
@@ -938,12 +967,27 @@ export default function Home() {
       }
 
       if (result.action === "revote-no-votes") {
-        setMessage("本轮无人投票，已自动发起加赛。");
+        setMessage("本轮无人投票，已进入讨论阶段，请房主开启下一轮投票。");
+        return;
+      }
+
+      if (result.action === "revote-no-votes-pending") {
+        setMessage("本轮无人投票，请继续描述，由房主开启下一轮投票。");
         return;
       }
 
       if (result.action === "revote-tie") {
-        setMessage("本轮出现平票，已自动进入加赛投票。");
+        setMessage("本轮出现平票，已进入讨论阶段，请房主开启加赛投票。");
+        return;
+      }
+
+      if (result.action === "revote-tie-pending") {
+        setMessage("本轮出现平票，请继续描述，由房主开启加赛投票。");
+        return;
+      }
+
+      if (result.action === "noop" && result.reason === "waiting-for-deadline-or-all-votes") {
+        setMessage("尚未到投票截止且未全员投票，暂不结算。");
         return;
       }
 
@@ -1046,8 +1090,8 @@ export default function Home() {
   useEffect(() => {
     if (!room || room.status !== "voting" || autoPublishingRef.current) return;
 
-    const aliveCount = alivePlayers.length;
-    const allVoted = aliveCount > 0 && votedCount >= aliveCount;
+    const voterCount = eligibleVoters.length;
+    const allVoted = voterCount > 0 && votedCount >= voterCount;
     const deadlineReached = !!voteDeadlineMs && nowMs >= voteDeadlineMs;
 
     if (!allVoted && !deadlineReached) return;
@@ -1056,7 +1100,7 @@ export default function Home() {
     void publishVotingResult().finally(() => {
       autoPublishingRef.current = false;
     });
-  }, [room, alivePlayers.length, votedCount, voteDeadlineMs, nowMs, publishVotingResult]);
+  }, [room, eligibleVoters.length, votedCount, voteDeadlineMs, nowMs, publishVotingResult]);
 
   const kickPlayer = async (targetPlayer: PlayerRow) => {
     if (!room || !isHost) return;
@@ -1508,7 +1552,9 @@ export default function Home() {
                     </button>
                     {room.vote_enabled && room.status === "playing" && (
                       <button type="button" className="btn" onClick={openVoting} disabled={busy}>
-                        开启第 {room.vote_round} 轮投票
+                        {room.vote_candidate_ids && room.vote_candidate_ids.length > 0
+                          ? `开启第 ${room.vote_round} 轮加赛投票`
+                          : `开启第 ${room.vote_round} 轮投票`}
                       </button>
                     )}
                     {room.vote_enabled && room.status === "voting" && (
@@ -1557,12 +1603,22 @@ export default function Home() {
                 <div className="vote-box">
                   <h3>本轮投票</h3>
                   <p className="hint">
-                    已投票人数：{votedCount}/{alivePlayers.length}
+                    已投票人数：{votedCount}/{eligibleVoters.length}
                     {remainingVoteSeconds != null ? ` · 剩余 ${remainingVoteSeconds} 秒` : ""}
                   </p>
 
                   {room.vote_candidate_ids && room.vote_candidate_ids.length > 0 && (
-                    <p className="hint">当前为平票加赛，仅可在平票玩家中投票。</p>
+                    <p className="hint">
+                      当前为平票加赛：候选人仅限
+                      {tieCandidatePlayers.length > 0
+                        ? ` ${tieCandidatePlayers.map((player) => `#${player.seat_no} ${player.name}`).join("、")}`
+                        : " 平票玩家"}
+                      ；仅其余存活玩家可投票。
+                    </p>
+                  )}
+
+                  {!canCurrentPlayerVote && room.vote_candidate_ids && room.vote_candidate_ids.length > 0 && (
+                    <p className="hint">你是平票候选人，本轮不能投票，请等待其他存活玩家投票。</p>
                   )}
 
                   <label>
@@ -1570,6 +1626,7 @@ export default function Home() {
                     <select
                       value={voteTargetId}
                       onChange={(event) => setVoteTargetId(event.target.value)}
+                      disabled={!canCurrentPlayerVote}
                     >
                       <option value="">请选择玩家</option>
                       {voteScopePlayers
@@ -1581,7 +1638,12 @@ export default function Home() {
                         ))}
                     </select>
                   </label>
-                  <button type="button" className="btn primary" onClick={castVote} disabled={busy}>
+                  <button
+                    type="button"
+                    className="btn primary"
+                    onClick={castVote}
+                    disabled={busy || !canCurrentPlayerVote}
+                  >
                     提交/更新我的投票
                   </button>
                 </div>
