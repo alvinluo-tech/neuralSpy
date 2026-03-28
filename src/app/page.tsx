@@ -705,6 +705,24 @@ export default function Home() {
     setError("");
   };
 
+  useEffect(() => {
+    if (!roomId || !room) return;
+    if (players.length === 0) return;
+
+    const stillInRoom = players.some((player) => player.session_id === sessionId);
+    if (stillInRoom) return;
+
+    // If current session is no longer in player list, this user has been removed.
+    setRoomId(null);
+    setRoom(null);
+    setPlayers([]);
+    setVotes([]);
+    setWordVisible(false);
+    setVoteTargetId("");
+    setError("");
+    setMessage("你已被房主移出房间。");
+  }, [roomId, room, players, sessionId]);
+
   const updateRoomCategory = async () => {
     if (!room || !isHost) return;
 
@@ -742,34 +760,13 @@ export default function Home() {
     setError("");
 
     try {
-      if (room.status === "lobby") {
-        const remove = await supabase.from("players").delete().eq("id", targetPlayer.id);
-        if (remove.error) {
-          throw new Error(remove.error.message);
-        }
+      const remove = await supabase.from("players").delete().eq("id", targetPlayer.id);
+      if (remove.error) {
+        throw new Error(remove.error.message);
+      }
 
-        setMessage(`已将玩家 ${targetPlayer.seat_no}（${targetPlayer.name}）移出房间。`);
-      } else {
-        const markOut = await supabase
-          .from("players")
-          .update({ is_alive: false })
-          .eq("id", targetPlayer.id);
-
-        if (markOut.error) {
-          throw new Error(markOut.error.message);
-        }
-
-        await supabase
-          .from("votes")
-          .delete()
-          .eq("room_id", room.id)
-          .eq("round_number", room.round_number)
-          .eq("vote_round", room.vote_round)
-          .or(`voter_player_id.eq.${targetPlayer.id},target_player_id.eq.${targetPlayer.id}`);
-
-        const nextPlayers = players.map((player) =>
-          player.id === targetPlayer.id ? { ...player, is_alive: false } : player,
-        );
+      if (room.status !== "lobby") {
+        const nextPlayers = players.filter((player) => player.id !== targetPlayer.id);
         const winner = detectWinner(nextPlayers);
 
         if (winner) {
@@ -796,9 +793,9 @@ export default function Home() {
             throw new Error(roomUpdate.error.message);
           }
         }
-
-        setMessage(`已移出玩家 ${targetPlayer.seat_no}（${targetPlayer.name}）。`);
       }
+
+      setMessage(`已将玩家 ${targetPlayer.seat_no}（${targetPlayer.name}）移出房间。`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "踢人失败");
     } finally {
