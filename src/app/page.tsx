@@ -43,6 +43,12 @@ type WordPair = {
   undercover: string;
 };
 
+type WordHistoryRow = {
+  pair_key: string;
+  civilian: string;
+  undercover: string;
+};
+
 const SESSION_KEY = "undercover.session.id";
 
 const randomCode = () => {
@@ -76,6 +82,12 @@ const detectWinner = (players: PlayerRow[]) => {
   return null;
 };
 
+const normalizePairKey = (pair: WordPair) => {
+  const left = pair.civilian.trim().toLowerCase();
+  const right = pair.undercover.trim().toLowerCase();
+  return [left, right].sort().join("||");
+};
+
 export default function Home() {
   const [sessionId, setSessionId] = useState("");
   const [nickname, setNickname] = useState("");
@@ -92,10 +104,17 @@ export default function Home() {
 
   const [wordVisible, setWordVisible] = useState(false);
   const [voteTargetId, setVoteTargetId] = useState<string>("");
+  const [editableCategory, setEditableCategory] = useState("");
 
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (room) {
+      setEditableCategory(room.category);
+    }
+  }, [room]);
 
   useEffect(() => {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -364,15 +383,65 @@ export default function Home() {
     setMessage("");
 
     try {
-      const response = await fetch("/api/grok/words", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category: room.category }),
-      });
+      const historyRes = await supabase
+        .from("room_word_history")
+        .select("pair_key, civilian, undercover")
+        .eq("room_id", room.id)
+        .eq("category", room.category);
 
-      const data = (await response.json()) as { pair?: WordPair; error?: string };
-      if (!response.ok || !data.pair) {
-        throw new Error(data.error ?? "AI 词条生成失败");
+      if (historyRes.error) {
+        throw new Error(historyRes.error.message);
+      }
+
+      const historyRows = (historyRes.data ?? []) as WordHistoryRow[];
+      const usedKeys = new Set(historyRows.map((row) => row.pair_key));
+      const excludedPairs = historyRows.map((row) => `${row.civilian}/${row.undercover}`);
+
+      let acceptedPair: WordPair | null = null;
+
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const response = await fetch("/api/grok/words", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            category: room.category,
+            excludedPairs,
+          }),
+        });
+
+        const data = (await response.json()) as { pair?: WordPair; error?: string };
+        if (!response.ok || !data.pair) {
+          throw new Error(data.error ?? "AI 词条生成失败");
+        }
+
+        const pairKey = normalizePairKey(data.pair);
+        if (usedKeys.has(pairKey)) {
+          continue;
+        }
+
+        const insertHistory = await supabase.from("room_word_history").insert({
+          room_id: room.id,
+          category: room.category,
+          pair_key: pairKey,
+          civilian: data.pair.civilian,
+          undercover: data.pair.undercover,
+          round_number: room.round_number + 1,
+        });
+
+        if (insertHistory.error) {
+          if (insertHistory.error.code === "23505") {
+            usedKeys.add(pairKey);
+            continue;
+          }
+          throw new Error(insertHistory.error.message);
+        }
+
+        acceptedPair = data.pair;
+        break;
+      }
+
+      if (!acceptedPair) {
+        throw new Error("该类别可用词组已耗尽，请修改类别后再开局。");
       }
 
       const currentUndercoverCount = clamp(room.undercover_count, 1, Math.max(players.length - 1, 1));
@@ -383,7 +452,7 @@ export default function Home() {
         .update({
           is_undercover: false,
           is_alive: true,
-          current_word: data.pair.civilian,
+          current_word: acceptedPair.civilian,
         })
         .eq("room_id", room.id);
 
@@ -395,7 +464,7 @@ export default function Home() {
         .from("players")
         .update({
           is_undercover: true,
-          current_word: data.pair.undercover,
+          current_word: acceptedPair.undercover,
         })
         .in("id", undercoverIds);
 
@@ -586,6 +655,107 @@ export default function Home() {
     setError("");
   };
 
+  const updateRoomCategory = async () => {
+    if (!room || !isHost) return;
+
+    const nextCategory = editableCategory.trim();
+    if (!nextCategory) {
+      setError("类别不能为空。");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+
+    const update = await supabase
+      .from("rooms")
+      .update({ category: nextCategory })
+      .eq("id", room.id);
+
+    if (update.error) {
+      setError(update.error.message);
+    } else {
+      setMessage(`类别已更新为：${nextCategory}`);
+    }
+
+    setBusy(false);
+  };
+
+  const kickPlayer = async (targetPlayer: PlayerRow) => {
+    if (!room || !isHost) return;
+    if (targetPlayer.session_id === sessionId) {
+      setError("不能踢出自己。");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+
+    try {
+      if (room.status === "lobby") {
+        const remove = await supabase.from("players").delete().eq("id", targetPlayer.id);
+        if (remove.error) {
+          throw new Error(remove.error.message);
+        }
+
+        setMessage(`已将玩家 ${targetPlayer.seat_no}（${targetPlayer.name}）移出房间。`);
+      } else {
+        const markOut = await supabase
+          .from("players")
+          .update({ is_alive: false })
+          .eq("id", targetPlayer.id);
+
+        if (markOut.error) {
+          throw new Error(markOut.error.message);
+        }
+
+        await supabase
+          .from("votes")
+          .delete()
+          .eq("room_id", room.id)
+          .eq("round_number", room.round_number)
+          .eq("vote_round", room.vote_round)
+          .or(`voter_player_id.eq.${targetPlayer.id},target_player_id.eq.${targetPlayer.id}`);
+
+        const nextPlayers = players.map((player) =>
+          player.id === targetPlayer.id ? { ...player, is_alive: false } : player,
+        );
+        const winner = detectWinner(nextPlayers);
+
+        if (winner) {
+          const finish = await supabase
+            .from("rooms")
+            .update({
+              status: "finished",
+              result_summary: `玩家 ${targetPlayer.seat_no}（${targetPlayer.name}）被移出。最终胜方：${winner}阵营。`,
+            })
+            .eq("id", room.id);
+
+          if (finish.error) {
+            throw new Error(finish.error.message);
+          }
+        } else {
+          const roomUpdate = await supabase
+            .from("rooms")
+            .update({
+              result_summary: `玩家 ${targetPlayer.seat_no}（${targetPlayer.name}）被房主移出。`,
+            })
+            .eq("id", room.id);
+
+          if (roomUpdate.error) {
+            throw new Error(roomUpdate.error.message);
+          }
+        }
+
+        setMessage(`已移出玩家 ${targetPlayer.seat_no}（${targetPlayer.name}）。`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "踢人失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!sessionId) {
     return (
       <div className="page-shell">
@@ -695,6 +865,20 @@ export default function Home() {
               <p className="hint">局数：{room.round_number} · 投票轮次：{room.vote_round}</p>
               <p className="hint">投票功能：{room.vote_enabled ? "开启" : "关闭"}</p>
 
+              {isHost && (
+                <div className="inline-row room-category-editor">
+                  <input
+                    type="text"
+                    value={editableCategory}
+                    onChange={(event) => setEditableCategory(event.target.value)}
+                    placeholder="直接修改房间类别"
+                  />
+                  <button type="button" className="btn ghost" onClick={updateRoomCategory} disabled={busy}>
+                    保存类别
+                  </button>
+                </div>
+              )}
+
               {currentPlayer && (
                 <div className="word-card self-word-card">
                   <span className="tag">你的身份词</span>
@@ -756,10 +940,22 @@ export default function Home() {
               <ul className="player-list">
                 {players.map((player) => (
                   <li key={player.id} className={!player.is_alive ? "out" : ""}>
-                    <span>
+                    <span className="player-main">
                       #{player.seat_no} {player.name} {player.session_id === sessionId ? "(你)" : ""}
                     </span>
-                    <strong>{player.is_alive ? "存活" : "出局"}</strong>
+                    <span className="player-side">
+                      <strong>{player.is_alive ? "存活" : "出局"}</strong>
+                      {isHost && player.session_id !== sessionId && (
+                        <button
+                          type="button"
+                          className="btn danger tiny"
+                          onClick={() => void kickPlayer(player)}
+                          disabled={busy}
+                        >
+                          踢出
+                        </button>
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>

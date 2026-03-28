@@ -76,9 +76,13 @@ export async function POST(request: NextRequest) {
 
   const body = (await request.json()) as {
     category?: string;
+    excludedPairs?: string[];
   };
 
   const category = (body.category ?? "日常").trim();
+  const excludedPairs = Array.isArray(body.excludedPairs)
+    ? body.excludedPairs.map((item) => item.trim()).filter(Boolean).slice(0, 80)
+    : [];
 
   const apiUrl = process.env.GROK_API_URL ?? "https://api.x.ai/v1/chat/completions";
   const model = process.env.GROK_MODEL ?? "grok-4-1-fast";
@@ -89,6 +93,9 @@ export async function POST(request: NextRequest) {
     "两个词必须容易混淆但不完全相同。",
     "严格返回 JSON，格式为：",
     '{"pair":{"civilian":"平民词","undercover":"卧底词"}}',
+    excludedPairs.length > 0
+      ? `禁止输出以下任意词组（包含顺序互换也视为重复）：${excludedPairs.join("；")}`
+      : "",
     "不要返回 markdown，不要返回解释文字。",
   ].join("\n");
 

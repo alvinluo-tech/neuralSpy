@@ -189,6 +189,20 @@ button:focus {
   border: 1px solid #d5dbd4;
 }
 
+.btn.danger {
+  background: #f8ddd4;
+  color: #8b2f1a;
+}
+
+.btn.danger:hover {
+  background: #f3cec2;
+}
+
+.btn.tiny {
+  padding: 6px 10px;
+  font-size: 0.78rem;
+}
+
 .check-line {
   display: flex;
   align-items: center;
@@ -224,6 +238,14 @@ button:focus {
   min-height: 120px;
 }
 
+.room-category-editor {
+  margin: 10px 0 2px;
+}
+
+.room-category-editor input {
+  margin-top: 0;
+}
+
 .host-actions {
   margin-top: 14px;
   border-top: 1px solid #dee3de;
@@ -253,6 +275,17 @@ button:focus {
   justify-content: space-between;
   align-items: center;
   background: #fbfdfb;
+}
+
+.player-main {
+  display: inline-flex;
+  font-weight: 600;
+}
+
+.player-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .player-list li.out {

@@ -4,7 +4,9 @@
 
 - 多人创建/加入同一房间（Supabase Realtime 同步）
 - 每局开局时仅调用一次 AI，生成 1 组词条（平民词/卧底词）
+- 同一房间同一类别内词组去重，不会重复发同一组词
 - 每轮可开启投票，每个玩家投票后由系统统一公布结果
+- 房主可在房间内直接修改类别、并支持踢出玩家
 - 系统自动判定胜负（卧底全出局则平民胜；卧底人数 >= 平民人数则卧底胜）
 
 ## 本地开发
@@ -84,9 +86,22 @@ create table if not exists public.votes (
 	unique (room_id, round_number, vote_round, voter_player_id)
 );
 
+create table if not exists public.room_word_history (
+	id uuid primary key default gen_random_uuid(),
+	room_id uuid not null references public.rooms(id) on delete cascade,
+	category text not null,
+	pair_key text not null,
+	civilian text not null,
+	undercover text not null,
+	round_number int not null,
+	created_at timestamptz not null default now(),
+	unique (room_id, category, pair_key)
+);
+
 alter table public.rooms enable row level security;
 alter table public.players enable row level security;
 alter table public.votes enable row level security;
+alter table public.room_word_history enable row level security;
 
 drop policy if exists "rooms open" on public.rooms;
 create policy "rooms open"
@@ -107,6 +122,14 @@ with check (true);
 drop policy if exists "votes open" on public.votes;
 create policy "votes open"
 on public.votes
+for all
+to anon, authenticated
+using (true)
+with check (true);
+
+drop policy if exists "word history open" on public.room_word_history;
+create policy "word history open"
+on public.room_word_history
 for all
 to anon, authenticated
 using (true)
