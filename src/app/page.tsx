@@ -64,13 +64,59 @@ const clamp = (value: number, min: number, max: number) => {
   return Math.min(Math.max(value, min), max);
 };
 
-const pickUndercoverIds = (players: PlayerRow[], undercoverCount: number) => {
-  const pool = [...players.map((player) => player.id)];
-  for (let i = pool.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
+const secureRandomInt = (maxExclusive: number) => {
+  if (maxExclusive <= 1) return 0;
+
+  const cryptoApi = globalThis.crypto;
+  if (!cryptoApi?.getRandomValues) {
+    return Math.floor(Math.random() * maxExclusive);
   }
-  return pool.slice(0, undercoverCount);
+
+  const maxUint32 = 4294967296;
+  const threshold = Math.floor(maxUint32 / maxExclusive) * maxExclusive;
+  const buffer = new Uint32Array(1);
+
+  let value = 0;
+  do {
+    cryptoApi.getRandomValues(buffer);
+    value = buffer[0];
+  } while (value >= threshold);
+
+  return value % maxExclusive;
+};
+
+const undercoverKey = (ids: string[]) => {
+  return [...ids].sort().join("|");
+};
+
+const pickUndercoverIds = (
+  players: PlayerRow[],
+  undercoverCount: number,
+  previousKey?: string,
+) => {
+  const pool = [...players.map((player) => player.id)];
+  if (undercoverCount >= pool.length) {
+    return pool;
+  }
+
+  let fallback = pool.slice(0, undercoverCount);
+
+  // Retry several times to avoid repeating the exact same undercover set as last round.
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const shuffled = [...pool];
+    for (let i = shuffled.length - 1; i > 0; i -= 1) {
+      const j = secureRandomInt(i + 1);
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    const candidate = shuffled.slice(0, undercoverCount);
+    fallback = candidate;
+    if (!previousKey || undercoverKey(candidate) !== previousKey) {
+      return candidate;
+    }
+  }
+
+  return fallback;
 };
 
 const detectWinner = (players: PlayerRow[]) => {
@@ -445,7 +491,11 @@ export default function Home() {
       }
 
       const currentUndercoverCount = clamp(room.undercover_count, 1, Math.max(players.length - 1, 1));
-      const undercoverIds = pickUndercoverIds(players, currentUndercoverCount);
+      const previousUndercover = players
+        .filter((player) => player.is_undercover)
+        .map((player) => player.id);
+      const previousKey = room.round_number > 0 ? undercoverKey(previousUndercover) : undefined;
+      const undercoverIds = pickUndercoverIds(players, currentUndercoverCount, previousKey);
 
       const resetPlayers = await supabase
         .from("players")
