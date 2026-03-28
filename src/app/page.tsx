@@ -1,7 +1,8 @@
 "use client";
 
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { pinyin } from "pinyin-pro";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 type RoomRow = {
@@ -14,6 +15,10 @@ type RoomRow = {
   vote_enabled: boolean;
   round_number: number;
   vote_round: number;
+  vote_duration_seconds: number;
+  vote_started_at: string | null;
+  vote_deadline_at: string | null;
+  vote_candidate_ids: string[] | null;
   last_eliminated_player_id: string | null;
   result_summary: string | null;
 };
@@ -49,7 +54,42 @@ type WordHistoryRow = {
   undercover: string;
 };
 
+type Category = {
+  id: string;
+  name: string;
+  display_name: string;
+  sort_order: number;
+  category_subcategories?: Subcategory[];
+};
+
+type Subcategory = {
+  id: string;
+  name: string;
+  display_name: string;
+  examples: { examples: string[] };
+  sort_order: number;
+};
+
+type CategoryUsageRow = {
+  category: string;
+};
+
+type CategorySuggestion = {
+  key: string;
+  categoryId: string;
+  categoryDisplayName: string;
+  subcategoryDisplayName: string;
+  examples: string[];
+  categorySort: number;
+  subcategorySort: number;
+  usageCount: number;
+  categoryInitials: string;
+  subcategoryInitials: string;
+  isRandomOption?: boolean;
+};
+
 const SESSION_KEY = "undercover.session.id";
+const ALL_CATEGORY_RANDOM = "全部分类（系统随机）";
 
 const randomCode = () => {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -134,6 +174,33 @@ const normalizePairKey = (pair: WordPair) => {
   return [left, right].sort().join("||");
 };
 
+const normalizeSearchText = (value: string) => value.toLowerCase().replace(/\s+/g, "");
+
+const subsequenceMatch = (target: string, query: string) => {
+  if (!query) return true;
+  let qi = 0;
+  for (let i = 0; i < target.length && qi < query.length; i += 1) {
+    if (target[i] === query[qi]) qi += 1;
+  }
+  return qi === query.length;
+};
+
+const toPinyinInitials = (value: string) => {
+  try {
+    return pinyin(value, {
+      pattern: "first",
+      toneType: "none",
+      type: "array",
+      nonZh: "consecutive",
+    })
+      .join("")
+      .toLowerCase()
+      .replace(/\s+/g, "");
+  } catch {
+    return "";
+  }
+};
+
 export default function Home() {
   const [sessionId, setSessionId] = useState("");
   const [nickname, setNickname] = useState("");
@@ -142,6 +209,14 @@ export default function Home() {
   const [createCategory, setCreateCategory] = useState("游戏");
   const [createUndercoverCount, setCreateUndercoverCount] = useState(1);
   const [createVoteEnabled, setCreateVoteEnabled] = useState(true);
+  const [createVoteDurationSeconds, setCreateVoteDurationSeconds] = useState(60);
+
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [categorySearchOpen, setCategorySearchOpen] = useState(false);
+  const [categorySearchQuery, setCategorySearchQuery] = useState("");
+  const [roomCategorySearchOpen, setRoomCategorySearchOpen] = useState(false);
+  const [roomCategorySearchQuery, setRoomCategorySearchQuery] = useState("");
+  const [categoryUsageMap, setCategoryUsageMap] = useState<Record<string, number>>({});
 
   const [roomId, setRoomId] = useState<string | null>(null);
   const [room, setRoom] = useState<RoomRow | null>(null);
@@ -151,16 +226,26 @@ export default function Home() {
   const [wordVisible, setWordVisible] = useState(false);
   const [voteTargetId, setVoteTargetId] = useState<string>("");
   const [editableCategory, setEditableCategory] = useState("");
+  const [editableVoteDurationSeconds, setEditableVoteDurationSeconds] = useState(60);
+  const [nowMs, setNowMs] = useState(Date.now());
 
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const autoPublishingRef = useRef(false);
 
   useEffect(() => {
     if (room) {
       setEditableCategory(room.category);
+      setRoomCategorySearchQuery(room.category);
+      setEditableVoteDurationSeconds(room.vote_duration_seconds ?? 60);
     }
   }, [room]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -174,11 +259,161 @@ export default function Home() {
     setSessionId(newId);
   }, []);
 
+  useEffect(() => {
+    const fetchCategories = async () => {
+      try {
+        const res = await fetch("/api/categories");
+        if (!res.ok) throw new Error("Failed to fetch categories");
+        const data = await res.json();
+        setCategories(data.categories || []);
+        // 默认选择第一个主类别
+        if (data.categories && data.categories.length > 0) {
+          const firstCategory = data.categories[0];
+          // 默认选择第一个子类别作为初始类别
+          if (firstCategory.category_subcategories && firstCategory.category_subcategories.length > 0) {
+            setCreateCategory(firstCategory.category_subcategories[0].display_name);
+            setCategorySearchQuery(firstCategory.category_subcategories[0].display_name);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch categories:", err);
+      }
+    };
+    fetchCategories();
+  }, []);
+
+  useEffect(() => {
+    const fetchCategoryUsage = async () => {
+      const [roomsRes, historyRes] = await Promise.all([
+        supabase.from("rooms").select("category"),
+        supabase.from("room_word_history").select("category"),
+      ]);
+
+      const usage: Record<string, number> = {};
+      const rows = [
+        ...((roomsRes.data ?? []) as CategoryUsageRow[]),
+        ...((historyRes.data ?? []) as CategoryUsageRow[]),
+      ];
+
+      rows.forEach((row) => {
+        const key = row.category?.trim();
+        if (!key) return;
+        usage[key] = (usage[key] ?? 0) + 1;
+      });
+
+      setCategoryUsageMap(usage);
+    };
+
+    void fetchCategoryUsage();
+  }, []);
+
+  const allCategorySuggestions = useMemo(() => {
+    return categories.flatMap((category) =>
+      (category.category_subcategories ?? []).map((subcategory) => ({
+        key: `${category.id}-${subcategory.id}`,
+        categoryId: category.id,
+        categoryDisplayName: category.display_name,
+        subcategoryDisplayName: subcategory.display_name,
+        examples: subcategory.examples?.examples ?? [],
+        categorySort: category.sort_order,
+        subcategorySort: subcategory.sort_order,
+        usageCount: categoryUsageMap[subcategory.display_name] ?? 0,
+        categoryInitials: toPinyinInitials(category.display_name),
+        subcategoryInitials: toPinyinInitials(subcategory.display_name),
+      })),
+    );
+  }, [categories, categoryUsageMap]);
+
+  const buildCategorySuggestions = useCallback(
+    (rawQuery: string, emptyLimit = 10) => {
+      const query = rawQuery.trim().toLowerCase();
+      const q = normalizeSearchText(query);
+      const randomInitials = toPinyinInitials(ALL_CATEGORY_RANDOM);
+      const randomOption: CategorySuggestion = {
+        key: "all-random",
+        categoryId: "",
+        categoryDisplayName: "随机模式",
+        subcategoryDisplayName: ALL_CATEGORY_RANDOM,
+        examples: ["每局随机", "无需手动选择"],
+        categorySort: -1,
+        subcategorySort: -1,
+        usageCount: 0,
+        categoryInitials: "sj",
+        subcategoryInitials: randomInitials,
+        isRandomOption: true,
+      };
+
+      const randomMatches =
+        !q ||
+        randomOption.subcategoryDisplayName.includes(query) ||
+        randomOption.subcategoryInitials.includes(q) ||
+        "allrandomsuijiquanbu".includes(q);
+
+      if (!query) {
+        const top = [...allCategorySuggestions]
+          .sort((a, b) => {
+            if (b.usageCount !== a.usageCount) return b.usageCount - a.usageCount;
+            if (a.categorySort !== b.categorySort) return a.categorySort - b.categorySort;
+            return a.subcategorySort - b.subcategorySort;
+          })
+          .slice(0, Math.max(emptyLimit - 1, 0));
+
+        return [randomOption, ...top];
+      }
+
+      const matches = allCategorySuggestions
+        .map((item) => {
+          const categoryName = normalizeSearchText(item.categoryDisplayName);
+          const subcategoryName = normalizeSearchText(item.subcategoryDisplayName);
+          const exampleText = normalizeSearchText(item.examples.join(" "));
+          const categoryInitials = item.categoryInitials;
+          const subcategoryInitials = item.subcategoryInitials;
+
+          let score = 0;
+          if (subcategoryName.startsWith(q)) score += 6;
+          if (subcategoryName.includes(q)) score += 5;
+          if (categoryName.includes(q)) score += 4;
+          if (subcategoryInitials.startsWith(q)) score += 4;
+          if (subcategoryInitials.includes(q)) score += 3;
+          if (categoryInitials.startsWith(q)) score += 3;
+          if (categoryInitials.includes(q)) score += 2;
+          if (exampleText.includes(q)) score += 2;
+          if (subsequenceMatch(subcategoryName, q)) score += 1;
+          if (subsequenceMatch(subcategoryInitials, q)) score += 1;
+
+          return { item, score };
+        })
+        .filter(({ score }) => score > 0)
+        .sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          if (b.item.usageCount !== a.item.usageCount) return b.item.usageCount - a.item.usageCount;
+          if (a.item.categorySort !== b.item.categorySort) return a.item.categorySort - b.item.categorySort;
+          return a.item.subcategorySort - b.item.subcategorySort;
+        })
+        .map(({ item }) => item)
+        .slice(0, 20);
+
+      if (!randomMatches) return matches;
+      return [randomOption, ...matches];
+    },
+    [allCategorySuggestions],
+  );
+
+  const categorySuggestions = useMemo(
+    () => buildCategorySuggestions(categorySearchQuery),
+    [buildCategorySuggestions, categorySearchQuery],
+  );
+
+  const roomCategorySuggestions = useMemo(
+    () => buildCategorySuggestions(roomCategorySearchQuery),
+    [buildCategorySuggestions, roomCategorySearchQuery],
+  );
+
   const loadRoomData = useCallback(
     async (targetRoomId: string) => {
       const roomRes = await supabase
         .from("rooms")
-        .select("id, code, host_session_id, status, category, undercover_count, vote_enabled, round_number, vote_round, last_eliminated_player_id, result_summary")
+        .select("id, code, host_session_id, status, category, undercover_count, vote_enabled, round_number, vote_round, vote_duration_seconds, vote_started_at, vote_deadline_at, vote_candidate_ids, last_eliminated_player_id, result_summary")
         .eq("id", targetRoomId)
         .single();
 
@@ -263,13 +498,36 @@ export default function Home() {
     return players.filter((player) => player.is_alive);
   }, [players]);
 
-  const voteStats = useMemo(() => {
-    const countMap = new Map<string, number>();
-    for (const vote of votes) {
-      countMap.set(vote.target_player_id, (countMap.get(vote.target_player_id) ?? 0) + 1);
+  const voteScopePlayers = useMemo(() => {
+    if (!room?.vote_candidate_ids || room.vote_candidate_ids.length === 0) {
+      return alivePlayers;
     }
-    return countMap;
+
+    const scope = new Set(room.vote_candidate_ids);
+    return alivePlayers.filter((player) => scope.has(player.id));
+  }, [alivePlayers, room?.vote_candidate_ids]);
+
+  const voteDeadlineMs = useMemo(() => {
+    if (!room?.vote_deadline_at) return null;
+    const parsed = Date.parse(room.vote_deadline_at);
+    return Number.isNaN(parsed) ? null : parsed;
+  }, [room?.vote_deadline_at]);
+
+  const remainingVoteSeconds = useMemo(() => {
+    if (!voteDeadlineMs) return null;
+    return Math.max(0, Math.ceil((voteDeadlineMs - nowMs) / 1000));
+  }, [voteDeadlineMs, nowMs]);
+
+  const votedCount = useMemo(() => {
+    return new Set(votes.map((vote) => vote.voter_player_id)).size;
   }, [votes]);
+
+  const rotatedPlayers = useMemo(() => {
+    if (players.length <= 1) return players;
+    const sorted = [...players].sort((a, b) => a.seat_no - b.seat_no);
+    const rotation = room ? Math.max(room.round_number - 1, 0) % sorted.length : 0;
+    return [...sorted.slice(rotation), ...sorted.slice(0, rotation)];
+  }, [players, room]);
 
   const createRoom = async () => {
     if (!sessionId) return;
@@ -298,8 +556,12 @@ export default function Home() {
             vote_enabled: createVoteEnabled,
             round_number: 0,
             vote_round: 1,
+            vote_duration_seconds: clamp(createVoteDurationSeconds, 15, 600),
+            vote_started_at: null,
+            vote_deadline_at: null,
+            vote_candidate_ids: null,
           })
-          .select("id, code, host_session_id, status, category, undercover_count, vote_enabled, round_number, vote_round, last_eliminated_player_id, result_summary")
+          .select("id, code, host_session_id, status, category, undercover_count, vote_enabled, round_number, vote_round, vote_duration_seconds, vote_started_at, vote_deadline_at, vote_candidate_ids, last_eliminated_player_id, result_summary")
           .single();
 
         if (roomInsert.error) {
@@ -429,11 +691,24 @@ export default function Home() {
     setMessage("");
 
     try {
+      const categoryPool = categories.flatMap((category) =>
+        (category.category_subcategories ?? []).map((subcategory) => subcategory.display_name),
+      );
+
+      const isRandomAllMode = room.category === ALL_CATEGORY_RANDOM;
+      const pickedCategory = isRandomAllMode
+        ? categoryPool[secureRandomInt(Math.max(categoryPool.length, 1))]
+        : room.category;
+
+      if (!pickedCategory) {
+        throw new Error("随机类别池为空，请先初始化分类库。");
+      }
+
       const historyRes = await supabase
         .from("room_word_history")
         .select("pair_key, civilian, undercover")
         .eq("room_id", room.id)
-        .eq("category", room.category);
+        .eq("category", pickedCategory);
 
       if (historyRes.error) {
         throw new Error(historyRes.error.message);
@@ -450,7 +725,7 @@ export default function Home() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            category: room.category,
+            category: pickedCategory,
             excludedPairs,
           }),
         });
@@ -467,7 +742,7 @@ export default function Home() {
 
         const insertHistory = await supabase.from("room_word_history").insert({
           room_id: room.id,
-          category: room.category,
+          category: pickedCategory,
           pair_key: pairKey,
           civilian: data.pair.civilian,
           undercover: data.pair.undercover,
@@ -528,6 +803,9 @@ export default function Home() {
           status: "playing",
           round_number: room.round_number + 1,
           vote_round: 1,
+          vote_started_at: null,
+          vote_deadline_at: null,
+          vote_candidate_ids: null,
           last_eliminated_player_id: null,
           result_summary: "本局已开始，系统已为每位玩家发词。",
         })
@@ -539,7 +817,21 @@ export default function Home() {
 
       setWordVisible(false);
       setVoteTargetId("");
-      setMessage("本局已开，AI 仅生成 1 组词并已发词。");
+      setMessage(
+        isRandomAllMode
+          ? `本局已开，系统随机类别：${pickedCategory}。AI 已生成 1 组词并发词。`
+          : "本局已开，AI 仅生成 1 组词并已发词。",
+      );
+
+      if (isRandomAllMode) {
+        const updateSummary = await supabase
+          .from("rooms")
+          .update({ result_summary: `本局已开始（随机类别：${pickedCategory}），系统已为每位玩家发词。` })
+          .eq("id", room.id);
+        if (updateSummary.error) {
+          throw new Error(updateSummary.error.message);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "开局失败");
     } finally {
@@ -552,9 +844,19 @@ export default function Home() {
     setBusy(true);
     setError("");
 
+    const now = new Date();
+    const duration = clamp(room.vote_duration_seconds ?? 60, 15, 600);
+    const deadline = new Date(now.getTime() + duration * 1000).toISOString();
+
     const update = await supabase
       .from("rooms")
-      .update({ status: "voting", result_summary: `第 ${room.vote_round} 轮投票进行中` })
+      .update({
+        status: "voting",
+        vote_started_at: now.toISOString(),
+        vote_deadline_at: deadline,
+        vote_candidate_ids: null,
+        result_summary: `第 ${room.vote_round} 轮投票进行中（限时 ${duration} 秒）`,
+      })
       .eq("id", room.id);
 
     if (update.error) {
@@ -574,6 +876,12 @@ export default function Home() {
 
     if (currentPlayer.id === voteTargetId) {
       setError("不能投自己。");
+      return;
+    }
+
+    const scopeIds = new Set(voteScopePlayers.map((player) => player.id));
+    if (!scopeIds.has(voteTargetId)) {
+      setError("当前轮次只能投指定候选人。请刷新后重试。");
       return;
     }
 
@@ -600,99 +908,64 @@ export default function Home() {
     setBusy(false);
   };
 
-  const publishVotingResult = async () => {
-    if (!room || !isHost) return;
+  const publishVotingResult = useCallback(async () => {
+    if (!room) return;
 
     setBusy(true);
     setError("");
 
     try {
-      const votesRes = await supabase
-        .from("votes")
-        .select("id, room_id, round_number, vote_round, voter_player_id, target_player_id")
-        .eq("room_id", room.id)
-        .eq("round_number", room.round_number)
-        .eq("vote_round", room.vote_round);
+      const response = await fetch(`/api/rooms/${room.id}/settle-vote`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          expectedRound: room.round_number,
+          expectedVoteRound: room.vote_round,
+        }),
+      });
 
-      if (votesRes.error) {
-        throw new Error(votesRes.error.message);
+      const result = (await response.json()) as {
+        ok?: boolean;
+        action?: string;
+        reason?: string;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(result.error ?? "服务端结算失败");
       }
 
-      const currentVotes = (votesRes.data ?? []) as VoteRow[];
-      if (currentVotes.length === 0) {
-        throw new Error("当前没有投票数据，无法公布结果。");
+      if (result.action === "revote-no-votes") {
+        setMessage("本轮无人投票，已自动发起加赛。");
+        return;
       }
 
-      const counter = new Map<string, number>();
-      for (const vote of currentVotes) {
-        counter.set(vote.target_player_id, (counter.get(vote.target_player_id) ?? 0) + 1);
+      if (result.action === "revote-tie") {
+        setMessage("本轮出现平票，已自动进入加赛投票。");
+        return;
       }
 
-      const maxVote = Math.max(...counter.values());
-      const candidates = Array.from(counter.entries())
-        .filter(([, value]) => value === maxVote)
-        .map(([key]) => key);
-
-      const eliminatedId = candidates[Math.floor(Math.random() * candidates.length)];
-      const eliminatedPlayer = players.find((player) => player.id === eliminatedId);
-      if (!eliminatedPlayer) {
-        throw new Error("无法定位被淘汰玩家。");
+      if (result.action === "finished") {
+        setMessage("投票已自动结算，游戏已结束。");
+        return;
       }
 
-      const eliminateRes = await supabase
-        .from("players")
-        .update({ is_alive: false })
-        .eq("id", eliminatedId);
-
-      if (eliminateRes.error) {
-        throw new Error(eliminateRes.error.message);
+      if (result.action === "eliminated") {
+        setMessage("投票已自动结算，已淘汰一名玩家。");
+        return;
       }
 
-      const nextPlayers = players.map((player) =>
-        player.id === eliminatedId ? { ...player, is_alive: false } : player,
-      );
-
-      const winner = detectWinner(nextPlayers);
-      const summary = `第 ${room.vote_round} 轮：玩家 ${eliminatedPlayer.seat_no}（${eliminatedPlayer.name}）出局。`;
-
-      if (winner) {
-        const finishRes = await supabase
-          .from("rooms")
-          .update({
-            status: "finished",
-            last_eliminated_player_id: eliminatedId,
-            result_summary: `${summary} 最终胜方：${winner}阵营。`,
-          })
-          .eq("id", room.id);
-
-        if (finishRes.error) {
-          throw new Error(finishRes.error.message);
-        }
-
-        setMessage(`已公布结果：${summary} ${winner}阵营获胜。`);
-      } else {
-        const continueRes = await supabase
-          .from("rooms")
-          .update({
-            status: "playing",
-            vote_round: room.vote_round + 1,
-            last_eliminated_player_id: eliminatedId,
-            result_summary: `${summary} 请继续讨论，准备下一轮投票。`,
-          })
-          .eq("id", room.id);
-
-        if (continueRes.error) {
-          throw new Error(continueRes.error.message);
-        }
-
-        setMessage(`已公布结果：${summary}`);
+      if (result.action === "noop" && result.reason === "stale-client") {
+        return;
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "公布失败");
     } finally {
       setBusy(false);
     }
-  };
+  }, [room]);
 
   const leaveRoom = () => {
     setRoomId(null);
@@ -748,6 +1021,42 @@ export default function Home() {
 
     setBusy(false);
   };
+
+  const updateVoteDuration = async () => {
+    if (!room || !isHost) return;
+
+    const nextDuration = clamp(editableVoteDurationSeconds, 15, 600);
+    setBusy(true);
+    setError("");
+
+    const update = await supabase
+      .from("rooms")
+      .update({ vote_duration_seconds: nextDuration })
+      .eq("id", room.id);
+
+    if (update.error) {
+      setError(update.error.message);
+    } else {
+      setMessage(`投票时长已更新为 ${nextDuration} 秒。`);
+    }
+
+    setBusy(false);
+  };
+
+  useEffect(() => {
+    if (!room || room.status !== "voting" || autoPublishingRef.current) return;
+
+    const aliveCount = alivePlayers.length;
+    const allVoted = aliveCount > 0 && votedCount >= aliveCount;
+    const deadlineReached = !!voteDeadlineMs && nowMs >= voteDeadlineMs;
+
+    if (!allVoted && !deadlineReached) return;
+
+    autoPublishingRef.current = true;
+    void publishVotingResult().finally(() => {
+      autoPublishingRef.current = false;
+    });
+  }, [room, alivePlayers.length, votedCount, voteDeadlineMs, nowMs, publishVotingResult]);
 
   const kickPlayer = async (targetPlayer: PlayerRow) => {
     if (!room || !isHost) return;
@@ -841,12 +1150,123 @@ export default function Home() {
               </label>
               <label>
                 本局类别
-                <input
-                  type="text"
-                  value={createCategory}
-                  onChange={(event) => setCreateCategory(event.target.value)}
-                  placeholder="例如：游戏"
-                />
+                <div
+                  style={{ position: "relative" }}
+                  onBlur={() => {
+                    window.setTimeout(() => setCategorySearchOpen(false), 120);
+                  }}
+                >
+                  <input
+                    type="text"
+                    value={categorySearchQuery}
+                    onChange={(event) => {
+                      setCategorySearchQuery(event.target.value);
+                      setCreateCategory(event.target.value.trim() || createCategory);
+                    }}
+                    onFocus={() => setCategorySearchOpen(true)}
+                    placeholder="搜索分类..."
+                    style={{
+                      width: "100%",
+                      padding: "8px",
+                      border: "1px solid #ccc",
+                      borderRadius: "4px",
+                    }}
+                  />
+                  {categorySearchOpen && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "100%",
+                        left: 0,
+                        right: 0,
+                        backgroundColor: "#fff",
+                        border: "1px solid #ccc",
+                        borderTop: "none",
+                        borderRadius: "0 0 4px 4px",
+                        maxHeight: "300px",
+                        overflowY: "auto",
+                        zIndex: 1000,
+                      }}
+                    >
+                      <div
+                        style={{
+                          padding: "8px 12px",
+                          fontSize: "12px",
+                          color: "#777",
+                          borderBottom: "1px solid #eee",
+                          backgroundColor: "#fafafa",
+                        }}
+                      >
+                        {categorySearchQuery.trim() ? "模糊匹配结果" : "Top10 热门种类词"}
+                      </div>
+
+                      {categorySuggestions.length === 0 && categorySearchQuery.trim() ? (
+                        <div
+                          style={{
+                            padding: "10px 12px",
+                            borderBottom: "1px solid #eee",
+                            color: "#666",
+                          }}
+                        >
+                          没有匹配结果，继续输入可自定义类别。
+                        </div>
+                      ) : (
+                        categorySuggestions.map((item) => (
+                          <button
+                            key={item.key}
+                            type="button"
+                            style={{
+                              width: "100%",
+                              textAlign: "left",
+                              padding: "8px 12px",
+                              border: "none",
+                              borderBottom: "1px solid #eee",
+                              backgroundColor:
+                                createCategory === item.subcategoryDisplayName ? "#e8f4f8" : "#fff",
+                              cursor: "pointer",
+                            }}
+                            onClick={() => {
+                              setCreateCategory(item.subcategoryDisplayName);
+                              setCategorySearchQuery(item.subcategoryDisplayName);
+                              setCategorySearchOpen(false);
+                            }}
+                          >
+                            <div style={{ fontWeight: 600 }}>{item.subcategoryDisplayName}</div>
+                            <div style={{ fontSize: "12px", color: "#666" }}>
+                              {item.categoryDisplayName}
+                              {item.examples.length > 0 ? ` · 例：${item.examples.join(" vs ")}` : ""}
+                              {item.usageCount > 0 ? ` · 热度 ${item.usageCount}` : ""}
+                            </div>
+                          </button>
+                        ))
+                      )}
+
+                      {categorySearchQuery.trim() && (
+                        <button
+                          type="button"
+                          style={{
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "10px 12px",
+                            border: "none",
+                            backgroundColor: "#f8fbff",
+                            cursor: "pointer",
+                            color: "#1d4ed8",
+                          }}
+                          onClick={() => {
+                            setCreateCategory(categorySearchQuery.trim());
+                            setCategorySearchOpen(false);
+                          }}
+                        >
+                          使用“{categorySearchQuery.trim()}”作为自定义类别
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <p style={{ fontSize: "14px", color: "#666", marginTop: "4px" }}>
+                  当前选择：<strong>{createCategory || "未选择"}</strong>
+                </p>
               </label>
               <label>
                 卧底人数（开局时随机分配）
@@ -857,6 +1277,18 @@ export default function Home() {
                   value={createUndercoverCount}
                   onChange={(event) =>
                     setCreateUndercoverCount(clamp(Number(event.target.value) || 1, 1, 3))
+                  }
+                />
+              </label>
+              <label>
+                每轮投票限时（秒）
+                <input
+                  type="number"
+                  min={15}
+                  max={600}
+                  value={createVoteDurationSeconds}
+                  onChange={(event) =>
+                    setCreateVoteDurationSeconds(clamp(Number(event.target.value) || 15, 15, 600))
                   }
                 />
               </label>
@@ -911,17 +1343,129 @@ export default function Home() {
               </div>
               <p className="hint">局数：{room.round_number} · 投票轮次：{room.vote_round}</p>
               <p className="hint">投票功能：{room.vote_enabled ? "开启" : "关闭"}</p>
+              <p className="hint">每轮限时：{room.vote_duration_seconds ?? 60} 秒</p>
+
+              {isHost && (
+                <div
+                  className="room-category-editor"
+                  style={{ position: "relative" }}
+                  onBlur={() => {
+                    window.setTimeout(() => setRoomCategorySearchOpen(false), 120);
+                  }}
+                >
+                  <div className="inline-row">
+                    <input
+                      type="text"
+                      value={roomCategorySearchQuery}
+                      onChange={(event) => {
+                        setRoomCategorySearchQuery(event.target.value);
+                        setEditableCategory(event.target.value.trim() || editableCategory);
+                      }}
+                      onFocus={() => setRoomCategorySearchOpen(true)}
+                      placeholder="搜索并修改房间类别"
+                    />
+                    <button type="button" className="btn ghost" onClick={updateRoomCategory} disabled={busy}>
+                      保存类别
+                    </button>
+                  </div>
+
+                  {roomCategorySearchOpen && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: "100%",
+                        left: 0,
+                        right: 0,
+                        backgroundColor: "#fff",
+                        border: "1px solid #ccc",
+                        borderTop: "none",
+                        borderRadius: "0 0 4px 4px",
+                        maxHeight: "260px",
+                        overflowY: "auto",
+                        zIndex: 1000,
+                      }}
+                    >
+                      <div
+                        style={{
+                          padding: "8px 12px",
+                          fontSize: "12px",
+                          color: "#777",
+                          borderBottom: "1px solid #eee",
+                          backgroundColor: "#fafafa",
+                        }}
+                      >
+                        {roomCategorySearchQuery.trim() ? "模糊匹配结果" : "Top10 热门种类词"}
+                      </div>
+
+                      {roomCategorySuggestions.map((item) => (
+                        <button
+                          key={`room-${item.key}`}
+                          type="button"
+                          style={{
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "8px 12px",
+                            border: "none",
+                            borderBottom: "1px solid #eee",
+                            backgroundColor:
+                              editableCategory === item.subcategoryDisplayName ? "#e8f4f8" : "#fff",
+                            cursor: "pointer",
+                          }}
+                          onClick={() => {
+                            setEditableCategory(item.subcategoryDisplayName);
+                            setRoomCategorySearchQuery(item.subcategoryDisplayName);
+                            setRoomCategorySearchOpen(false);
+                          }}
+                        >
+                          <div style={{ fontWeight: 600 }}>{item.subcategoryDisplayName}</div>
+                          <div style={{ fontSize: "12px", color: "#666" }}>
+                            {item.categoryDisplayName}
+                            {item.examples.length > 0 ? ` · 例：${item.examples.join(" vs ")}` : ""}
+                            {item.usageCount > 0 ? ` · 热度 ${item.usageCount}` : ""}
+                          </div>
+                        </button>
+                      ))}
+
+                      {roomCategorySearchQuery.trim() && (
+                        <button
+                          type="button"
+                          style={{
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "10px 12px",
+                            border: "none",
+                            backgroundColor: "#f8fbff",
+                            cursor: "pointer",
+                            color: "#1d4ed8",
+                          }}
+                          onClick={() => {
+                            const custom = roomCategorySearchQuery.trim();
+                            setEditableCategory(custom);
+                            setRoomCategorySearchOpen(false);
+                          }}
+                        >
+                          使用“{roomCategorySearchQuery.trim()}”作为自定义类别
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {isHost && (
                 <div className="inline-row room-category-editor">
                   <input
-                    type="text"
-                    value={editableCategory}
-                    onChange={(event) => setEditableCategory(event.target.value)}
-                    placeholder="直接修改房间类别"
+                    type="number"
+                    min={15}
+                    max={600}
+                    value={editableVoteDurationSeconds}
+                    onChange={(event) =>
+                      setEditableVoteDurationSeconds(clamp(Number(event.target.value) || 15, 15, 600))
+                    }
+                    placeholder="投票时长（秒）"
                   />
-                  <button type="button" className="btn ghost" onClick={updateRoomCategory} disabled={busy}>
-                    保存类别
+                  <button type="button" className="btn ghost" onClick={updateVoteDuration} disabled={busy}>
+                    保存投票时长
                   </button>
                 </div>
               )}
@@ -984,10 +1528,12 @@ export default function Home() {
 
             <article className="panel">
               <h2>玩家列表</h2>
+              <p className="hint">当前发言顺序（每局自动轮换）：</p>
               <ul className="player-list">
-                {players.map((player) => (
+                {rotatedPlayers.map((player, index) => (
                   <li key={player.id} className={!player.is_alive ? "out" : ""}>
                     <span className="player-main">
+                      第{index + 1}位 ·
                       #{player.seat_no} {player.name} {player.session_id === sessionId ? "(你)" : ""}
                     </span>
                     <span className="player-side">
@@ -1010,6 +1556,15 @@ export default function Home() {
               {room.vote_enabled && room.status === "voting" && currentPlayer?.is_alive && (
                 <div className="vote-box">
                   <h3>本轮投票</h3>
+                  <p className="hint">
+                    已投票人数：{votedCount}/{alivePlayers.length}
+                    {remainingVoteSeconds != null ? ` · 剩余 ${remainingVoteSeconds} 秒` : ""}
+                  </p>
+
+                  {room.vote_candidate_ids && room.vote_candidate_ids.length > 0 && (
+                    <p className="hint">当前为平票加赛，仅可在平票玩家中投票。</p>
+                  )}
+
                   <label>
                     选择你怀疑的卧底
                     <select
@@ -1017,7 +1572,7 @@ export default function Home() {
                       onChange={(event) => setVoteTargetId(event.target.value)}
                     >
                       <option value="">请选择玩家</option>
-                      {alivePlayers
+                      {voteScopePlayers
                         .filter((player) => player.id !== currentPlayer.id)
                         .map((player) => (
                           <option key={player.id} value={player.id}>
@@ -1029,20 +1584,6 @@ export default function Home() {
                   <button type="button" className="btn primary" onClick={castVote} disabled={busy}>
                     提交/更新我的投票
                   </button>
-
-                  <p className="hint">
-                    已投票人数：{new Set(votes.map((vote) => vote.voter_player_id)).size}/{alivePlayers.length}
-                  </p>
-
-                  {votes.length > 0 && (
-                    <ul className="vote-stats">
-                      {alivePlayers.map((player) => (
-                        <li key={player.id}>
-                          玩家 {player.seat_no}（{player.name}）：{voteStats.get(player.id) ?? 0} 票
-                        </li>
-                      ))}
-                    </ul>
-                  )}
                 </div>
               )}
 

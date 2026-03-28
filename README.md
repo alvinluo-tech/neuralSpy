@@ -6,6 +6,7 @@
 - 每局开局时仅调用一次 AI，生成 1 组词条（平民词/卧底词）
 - 同一房间同一类别内词组去重，不会重复发同一组词
 - 每轮可开启投票，每个玩家投票后由系统统一公布结果
+- 投票结算由服务端执行，不依赖房主在线
 - 房主可在房间内直接修改类别、并支持踢出玩家
 - 系统自动判定胜负（卧底全出局则平民胜；卧底人数 >= 平民人数则卧底胜）
 
@@ -31,6 +32,7 @@ GROK_API_URL=https://api.x.ai/v1/chat/completions
 GROK_MODEL=grok-4-1-fast
 NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 ```
 
 3. 启动开发服务器
@@ -58,10 +60,56 @@ create table if not exists public.rooms (
 	vote_enabled boolean not null default true,
 	round_number int not null default 0,
 	vote_round int not null default 1,
+	vote_duration_seconds int not null default 60,
+	vote_started_at timestamptz,
+	vote_deadline_at timestamptz,
+	vote_candidate_ids uuid[],
 	last_eliminated_player_id uuid,
 	result_summary text,
 	created_at timestamptz not null default now()
 );
+
+alter table public.rooms add column if not exists vote_duration_seconds int not null default 60;
+alter table public.rooms add column if not exists vote_started_at timestamptz;
+alter table public.rooms add column if not exists vote_deadline_at timestamptz;
+alter table public.rooms add column if not exists vote_candidate_ids uuid[];
+
+create table if not exists public.categories (
+	id uuid primary key default gen_random_uuid(),
+	name text not null unique,
+	display_name text not null,
+	sort_order int not null,
+	created_at timestamptz not null default now()
+);
+
+create table if not exists public.category_subcategories (
+	id uuid primary key default gen_random_uuid(),
+	category_id uuid not null references public.categories(id) on delete cascade,
+	name text not null,
+	display_name text not null,
+	examples jsonb not null,
+	sort_order int not null,
+	created_at timestamptz not null default now()
+);
+
+alter table public.categories enable row level security;
+alter table public.category_subcategories enable row level security;
+
+drop policy if exists "categories open" on public.categories;
+create policy "categories open"
+on public.categories
+for all
+to anon, authenticated
+using (true)
+with check (true);
+
+drop policy if exists "category_subcategories open" on public.category_subcategories;
+create policy "category_subcategories open"
+on public.category_subcategories
+for all
+to anon, authenticated
+using (true)
+with check (true);
 
 create table if not exists public.players (
 	id uuid primary key default gen_random_uuid(),
@@ -138,6 +186,28 @@ with check (true);
 
 然后到 Database > Replication，把 `rooms`、`players`、`votes` 三张表加入 Realtime。
 
+## 初始化分类库
+
+为了让玩家能够便利地搜索和选择游戏类别，需要导入分类数据。在 Supabase 项目的 SQL Editor 执行 [scripts/init-categories.sql](scripts/init-categories.sql) 文件中的所有语句。
+
+分类库包含 10 个主类别（舌尖美食、居家生活、娱乐至上等），每个主类别下有 10 个子类别，子类别中包含词对示例。
+
+前端类别输入支持：
+
+- 模糊搜索（按主类别名、子类别名、示例词匹配）
+- 拼音首字母匹配（如 `sjms` 可匹配“舌尖美食”）
+- 空输入显示 Top10 热门种类词
+- 可选择“全部分类（系统随机）”，每局开局时由系统随机选择具体子类别
+
+导入完成后可执行以下 SQL 验证是否成功写入：
+
+```sql
+select count(*) as category_count from public.categories;
+select count(*) as subcategory_count from public.category_subcategories;
+```
+
+预期结果：`category_count = 10`，`subcategory_count = 100`。
+
 ## Grok API 说明
 
 - 前端调用 `POST /api/grok/words`
@@ -146,6 +216,13 @@ with check (true);
 - 每次房主点击“开始本局”只会调用一次 AI
 
 如果未配置密钥，会在前端提示配置环境变量。
+
+## 服务端自动结算说明
+
+- 结算接口：`POST /api/rooms/:roomId/settle-vote`
+- 任意客户端都可以触发调用，但实际结算由服务端（Service Role）做权威处理
+- 幂等设计：并发调用只会有一个请求实际生效，其它请求返回 `noop`
+- 因此即使房主离线，时间到或全员投票后仍可自动结算
 
 ## 部署到 Vercel
 
@@ -158,6 +235,7 @@ with check (true);
 - `GROK_MODEL`（可选）
 - `NEXT_PUBLIC_SUPABASE_URL`（必填）
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`（必填）
+- `SUPABASE_SERVICE_ROLE_KEY`（必填，仅服务端使用，不可暴露到前端）
 
 4. 触发部署，完成后即可访问线上地址
 
