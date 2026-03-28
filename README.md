@@ -1,36 +1,146 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 谁是卧底 Web（Next.js + Supabase）
 
-## Getting Started
+一个支持多人实时房间的“谁是卧底”网页应用，包含：
 
-First, run the development server:
+- 多人创建/加入同一房间（Supabase Realtime 同步）
+- 每局开局时仅调用一次 AI，生成 1 组词条（平民词/卧底词）
+- 每轮可开启投票，每个玩家投票后由系统统一公布结果
+- 系统自动判定胜负（卧底全出局则平民胜；卧底人数 >= 平民人数则卧底胜）
+
+## 本地开发
+
+1. 安装依赖
+
+```bash
+npm install
+```
+
+2. 配置环境变量
+
+```bash
+cp .env.example .env.local
+```
+
+然后在 `.env.local` 中填写：
+
+```bash
+GROK_API_KEY=your_grok_api_key
+GROK_API_URL=https://api.x.ai/v1/chat/completions
+GROK_MODEL=grok-4-1-fast
+NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+3. 启动开发服务器
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+访问 `http://localhost:3000`。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 你需要在 Supabase 配置什么
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+在 Supabase 项目的 SQL Editor 执行以下 SQL（可直接复制）：
 
-## Learn More
+```sql
+create extension if not exists "pgcrypto";
 
-To learn more about Next.js, take a look at the following resources:
+create table if not exists public.rooms (
+	id uuid primary key default gen_random_uuid(),
+	code text not null unique,
+	host_session_id text not null,
+	status text not null default 'lobby',
+	category text not null default '日常',
+	undercover_count int not null default 1,
+	vote_enabled boolean not null default true,
+	round_number int not null default 0,
+	vote_round int not null default 1,
+	last_eliminated_player_id uuid,
+	result_summary text,
+	created_at timestamptz not null default now()
+);
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+create table if not exists public.players (
+	id uuid primary key default gen_random_uuid(),
+	room_id uuid not null references public.rooms(id) on delete cascade,
+	session_id text not null,
+	name text not null,
+	seat_no int not null,
+	is_undercover boolean not null default false,
+	is_alive boolean not null default true,
+	current_word text,
+	joined_at timestamptz not null default now()
+);
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+create table if not exists public.votes (
+	id uuid primary key default gen_random_uuid(),
+	room_id uuid not null references public.rooms(id) on delete cascade,
+	round_number int not null,
+	vote_round int not null,
+	voter_player_id uuid not null references public.players(id) on delete cascade,
+	target_player_id uuid not null references public.players(id) on delete cascade,
+	created_at timestamptz not null default now(),
+	unique (room_id, round_number, vote_round, voter_player_id)
+);
 
-## Deploy on Vercel
+alter table public.rooms enable row level security;
+alter table public.players enable row level security;
+alter table public.votes enable row level security;
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+drop policy if exists "rooms open" on public.rooms;
+create policy "rooms open"
+on public.rooms
+for all
+to anon, authenticated
+using (true)
+with check (true);
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+drop policy if exists "players open" on public.players;
+create policy "players open"
+on public.players
+for all
+to anon, authenticated
+using (true)
+with check (true);
+
+drop policy if exists "votes open" on public.votes;
+create policy "votes open"
+on public.votes
+for all
+to anon, authenticated
+using (true)
+with check (true);
+```
+
+然后到 Database > Replication，把 `rooms`、`players`、`votes` 三张表加入 Realtime。
+
+## Grok API 说明
+
+- 前端调用 `POST /api/grok/words`
+- 服务端使用 `GROK_API_KEY` 调用 Grok 生成单组词条
+- 返回结构：`{ pair: { civilian, undercover } }`
+- 每次房主点击“开始本局”只会调用一次 AI
+
+如果未配置密钥，会在前端提示配置环境变量。
+
+## 部署到 Vercel
+
+1. 推送代码到 Git 仓库（GitHub/GitLab/Bitbucket）
+2. 在 Vercel 导入该仓库
+3. 在 Vercel 项目设置中添加环境变量：
+
+- `GROK_API_KEY`（必填）
+- `GROK_API_URL`（可选）
+- `GROK_MODEL`（可选）
+- `NEXT_PUBLIC_SUPABASE_URL`（必填）
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`（必填）
+
+4. 触发部署，完成后即可访问线上地址
+
+## 脚本
+
+- `npm run dev`：开发模式
+- `npm run build`：生产构建
+- `npm run start`：运行生产构建
+- `npm run lint`：代码检查
