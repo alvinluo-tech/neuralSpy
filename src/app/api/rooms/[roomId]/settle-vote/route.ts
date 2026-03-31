@@ -22,7 +22,7 @@ type PlayerRow = {
 
 type VoteRow = {
   voter_player_id: string;
-  target_player_id: string;
+  target_player_id: string | null;
 };
 
 const detectWinner = (players: PlayerRow[]) => {
@@ -112,11 +112,16 @@ export async function POST(
     }
 
     const rawVotes = (votesRes.data ?? []) as VoteRow[];
-    const votes = rawVotes.filter(
-      (vote) => voterScopeSet.has(vote.voter_player_id) && scopeSet.has(vote.target_player_id),
+    const participationVotes = rawVotes.filter((vote) => {
+      if (!voterScopeSet.has(vote.voter_player_id)) return false;
+      if (vote.target_player_id === null) return true;
+      return scopeSet.has(vote.target_player_id);
+    });
+    const countedVotes = participationVotes.filter(
+      (vote): vote is VoteRow & { target_player_id: string } => vote.target_player_id !== null,
     );
 
-    const uniqueVoters = new Set(votes.map((vote) => vote.voter_player_id)).size;
+    const uniqueVoters = new Set(participationVotes.map((vote) => vote.voter_player_id)).size;
     const allVoted = voterScopeIds.length > 0 && uniqueVoters >= voterScopeIds.length;
     const deadlineReached =
       !!room.vote_deadline_at && Date.now() >= Date.parse(room.vote_deadline_at);
@@ -129,7 +134,7 @@ export async function POST(
       });
     }
 
-    if (votes.length === 0) {
+    if (countedVotes.length === 0) {
       const pendingRes = await supabaseAdmin
         .from("rooms")
         .update({
@@ -138,7 +143,7 @@ export async function POST(
           vote_started_at: null,
           vote_deadline_at: null,
           vote_candidate_ids: scopeIds,
-          result_summary: `第 ${room.vote_round} 轮无人投票。请继续描述，由房主开启第 ${room.vote_round + 1} 轮投票。`,
+          result_summary: `第 ${room.vote_round} 轮无人有效投票（可能全员弃票）。请继续描述，由房主开启第 ${room.vote_round + 1} 轮投票。`,
         })
         .eq("id", room.id)
         .eq("status", "voting")
@@ -159,7 +164,7 @@ export async function POST(
     }
 
     const counter = new Map<string, number>();
-    for (const vote of votes) {
+    for (const vote of countedVotes) {
       counter.set(vote.target_player_id, (counter.get(vote.target_player_id) ?? 0) + 1);
     }
 

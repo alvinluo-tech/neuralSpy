@@ -40,7 +40,7 @@ type VoteRow = {
   round_number: number;
   vote_round: number;
   voter_player_id: string;
-  target_player_id: string;
+  target_player_id: string | null;
 };
 
 type WordPair = {
@@ -90,6 +90,7 @@ type CategorySuggestion = {
 
 const SESSION_KEY = "undercover.session.id";
 const ALL_CATEGORY_RANDOM = "全部分类（系统随机）";
+const ABSTAIN_VOTE_VALUE = "__ABSTAIN__";
 
 const randomCode = () => {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -893,7 +894,7 @@ export default function Home() {
   };
 
   const castVote = async () => {
-    if (!room || !currentPlayer || !voteTargetId) {
+    if (!room || !currentPlayer) {
       setError("请选择投票目标。");
       return;
     }
@@ -903,13 +904,19 @@ export default function Home() {
       return;
     }
 
-    if (currentPlayer.id === voteTargetId) {
+    const isAbstainVote = voteTargetId === ABSTAIN_VOTE_VALUE;
+    if (!isAbstainVote && !voteTargetId) {
+      setError("请选择投票目标或选择弃票。");
+      return;
+    }
+
+    if (!isAbstainVote && currentPlayer.id === voteTargetId) {
       setError("不能投自己。");
       return;
     }
 
     const scopeIds = new Set(voteScopePlayers.map((player) => player.id));
-    if (!scopeIds.has(voteTargetId)) {
+    if (!isAbstainVote && !scopeIds.has(voteTargetId)) {
       setError("当前轮次只能投指定候选人。请刷新后重试。");
       return;
     }
@@ -923,7 +930,7 @@ export default function Home() {
         round_number: room.round_number,
         vote_round: room.vote_round,
         voter_player_id: currentPlayer.id,
-        target_player_id: voteTargetId,
+        target_player_id: isAbstainVote ? null : voteTargetId,
       },
       { onConflict: "room_id,round_number,vote_round,voter_player_id" },
     );
@@ -931,7 +938,11 @@ export default function Home() {
     if (upsertRes.error) {
       setError(upsertRes.error.message);
     } else {
-      setMessage("投票成功，已记录。重复投票会覆盖你上一票。");
+      setMessage(
+        isAbstainVote
+          ? "你已选择弃票，系统已记录。重复投票会覆盖你上一票。"
+          : "投票成功，已记录。重复投票会覆盖你上一票。",
+      );
     }
 
     setBusy(false);
@@ -967,12 +978,12 @@ export default function Home() {
       }
 
       if (result.action === "revote-no-votes") {
-        setMessage("本轮无人投票，已进入讨论阶段，请房主开启下一轮投票。");
+        setMessage("本轮无人有效投票（可能全员弃票），已进入讨论阶段，请房主开启下一轮投票。");
         return;
       }
 
       if (result.action === "revote-no-votes-pending") {
-        setMessage("本轮无人投票，请继续描述，由房主开启下一轮投票。");
+        setMessage("本轮无人有效投票（可能全员弃票），请继续描述，由房主开启下一轮投票。");
         return;
       }
 
@@ -1599,13 +1610,15 @@ export default function Home() {
                 ))}
               </ul>
 
-              {room.vote_enabled && room.status === "voting" && currentPlayer?.is_alive && (
+              {room.vote_enabled && room.status === "voting" && currentPlayer && (
                 <div className="vote-box">
                   <h3>本轮投票</h3>
                   <p className="hint">
                     已投票人数：{votedCount}/{eligibleVoters.length}
                     {remainingVoteSeconds != null ? ` · 剩余 ${remainingVoteSeconds} 秒` : ""}
                   </p>
+
+                  {!currentPlayer.is_alive && <p className="hint">你已出局，当前只能查看投票进度。</p>}
 
                   {room.vote_candidate_ids && room.vote_candidate_ids.length > 0 && (
                     <p className="hint">
@@ -1621,6 +1634,10 @@ export default function Home() {
                     <p className="hint">你是平票候选人，本轮不能投票，请等待其他存活玩家投票。</p>
                   )}
 
+                  {!canCurrentPlayerVote && !room.vote_candidate_ids && currentPlayer.is_alive && (
+                    <p className="hint">你当前轮次不可投票，请等待房主开启下一轮或结算。</p>
+                  )}
+
                   <label>
                     选择你怀疑的卧底
                     <select
@@ -1629,6 +1646,7 @@ export default function Home() {
                       disabled={!canCurrentPlayerVote}
                     >
                       <option value="">请选择玩家</option>
+                      <option value={ABSTAIN_VOTE_VALUE}>弃票（不投任何人）</option>
                       {voteScopePlayers
                         .filter((player) => player.id !== currentPlayer.id)
                         .map((player) => (

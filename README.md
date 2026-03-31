@@ -6,6 +6,7 @@
 - 每局开局时仅调用一次 AI，生成 1 组词条（平民词/卧底词）
 - 同一房间同一类别内词组去重，不会重复发同一组词
 - 每轮可开启投票，每个玩家投票后由系统统一公布结果
+- 支持玩家主动弃票（弃票计入已投票人数，但不计入任何候选人得票）
 - 投票结算由服务端执行，不依赖房主在线
 - 房主可在房间内直接修改类别、并支持踢出玩家
 - 系统自动判定胜负（卧底全出局则平民胜；卧底人数 >= 平民人数则卧底胜）
@@ -129,10 +130,12 @@ create table if not exists public.votes (
 	round_number int not null,
 	vote_round int not null,
 	voter_player_id uuid not null references public.players(id) on delete cascade,
-	target_player_id uuid not null references public.players(id) on delete cascade,
+	target_player_id uuid references public.players(id) on delete cascade,
 	created_at timestamptz not null default now(),
 	unique (room_id, round_number, vote_round, voter_player_id)
 );
+
+alter table public.votes alter column target_player_id drop not null;
 
 create table if not exists public.room_word_history (
 	id uuid primary key default gen_random_uuid(),
