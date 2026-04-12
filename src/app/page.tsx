@@ -398,7 +398,7 @@ export default function HomePage() {
                             setCategorySearchOpen(false);
                           }}
                         >
-                          使用"{categorySearchQuery.trim()}"作为自定义类别
+                          使用“{categorySearchQuery.trim()}”作为自定义类别
                         </button>
                       )}
                     </div>

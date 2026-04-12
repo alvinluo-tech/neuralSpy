@@ -51,7 +51,7 @@ type RoomDataState = {
   error: string | null;
 };
 
-export const useRoomData = (roomId: string | null, sessionId: string) => {
+export const useRoomData = (roomId: string | null) => {
   const [state, setState] = useState<RoomDataState>({
     room: null,
     players: [],

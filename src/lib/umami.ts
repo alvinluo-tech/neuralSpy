@@ -14,6 +14,22 @@ type UmamiPayload = {
   hostname?: string;
 };
 
+type UmamiEventData = Record<string, string | number | boolean | null | undefined>;
+
+type UmamiTracker = {
+  track: {
+    (mapper: (props: UmamiPayload) => UmamiPayload): void;
+    (eventName: string, data?: UmamiEventData): void;
+  };
+  identify: (sessionId: string, data?: UmamiEventData) => void;
+};
+
+declare global {
+  interface Window {
+    umami?: UmamiTracker;
+  }
+}
+
 /**
  * Get the canonical URL for analytics
  * Removes dynamic route parameters (e.g., /room/abc123/play -> /room/play)
@@ -43,7 +59,7 @@ const getCanonicalUrl = (currentUrl: string): string => {
 export const trackPageView = (customUrl?: string, customTitle?: string): void => {
   if (typeof window === "undefined") return;
 
-  const umami = (window as any).umami;
+  const { umami } = window;
   if (!umami?.track) return;
 
   const url = customUrl ? getCanonicalUrl(customUrl) : getCanonicalUrl(window.location.pathname);
@@ -61,10 +77,10 @@ export const trackPageView = (customUrl?: string, customTitle?: string): void =>
  * @param eventName - The event name
  * @param data - Optional event data
  */
-export const trackEvent = (eventName: string, data?: Record<string, any>): void => {
+export const trackEvent = (eventName: string, data?: UmamiEventData): void => {
   if (typeof window === "undefined") return;
 
-  const umami = (window as any).umami;
+  const { umami } = window;
   if (!umami?.track) return;
 
   if (data) {
@@ -79,10 +95,10 @@ export const trackEvent = (eventName: string, data?: Record<string, any>): void 
  * @param sessionId - Unique session identifier
  * @param data - Optional session data
  */
-export const identifySession = (sessionId: string, data?: Record<string, any>): void => {
+export const identifySession = (sessionId: string, data?: UmamiEventData): void => {
   if (typeof window === "undefined") return;
 
-  const umami = (window as any).umami;
+  const { umami } = window;
   if (!umami?.identify) return;
 
   if (data) {

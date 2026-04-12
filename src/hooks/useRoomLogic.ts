@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import type { Category, Subcategory } from "./useCategorySearch";
 import type { RoomRow, PlayerRow } from "./useRoomData";
 
 export const ABSTAIN_VOTE_VALUE = "__ABSTAIN__";
@@ -20,9 +21,15 @@ type ConfirmDialogState = ConfirmDialogOptions & {
   open: boolean;
 };
 
-const randomCode = () => {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+type RoomWordHistoryRow = {
+  pair_key: string;
+  civilian: string;
+  undercover: string;
+};
+
+type GeneratedWordPair = {
+  civilian: string;
+  undercover: string;
 };
 
 const secureRandomInt = (maxExclusive: number) => {
@@ -94,7 +101,6 @@ export const useRoomLogic = (
   sessionId: string,
   room: RoomRow | null,
   players: PlayerRow[],
-  categories: any[],
   options?: {
     refreshRoom?: () => Promise<void> | void;
   }
@@ -143,7 +149,7 @@ export const useRoomLogic = (
       roomId: string,
       category: string,
       undercoverCount: number,
-      allCategories: any[]
+      allCategories: Category[]
     ): Promise<{ success: boolean; message: string }> => {
       if (!room || !isHost) {
         setError("仅房主可开局。");
@@ -170,7 +176,7 @@ export const useRoomLogic = (
         }
 
         const categoryPool = allCategories.flatMap((cat) =>
-          (cat.category_subcategories ?? []).map((sub: any) => sub.display_name)
+          (cat.category_subcategories ?? []).map((sub: Subcategory) => sub.display_name)
         );
 
         const isRandomAllMode = category === ALL_CATEGORY_RANDOM;
@@ -192,10 +198,9 @@ export const useRoomLogic = (
           throw new Error(historyRes.error.message);
         }
 
-        const usedKeys = new Set((historyRes.data ?? []).map((row: any) => row.pair_key));
-        const excludedPairs = (historyRes.data ?? []).map(
-          (row: any) => `${row.civilian}/${row.undercover}`
-        );
+        const historyRows = (historyRes.data ?? []) as RoomWordHistoryRow[];
+        const usedKeys = new Set(historyRows.map((row) => row.pair_key));
+        const excludedPairs = historyRows.map((row) => `${row.civilian}/${row.undercover}`);
 
         let acceptedPair: { civilian: string; undercover: string } | null = null;
 
@@ -209,7 +214,7 @@ export const useRoomLogic = (
             }),
           });
 
-          const data = (await response.json()) as { pair?: any; error?: string };
+          const data = (await response.json()) as { pair?: GeneratedWordPair; error?: string };
           if (!response.ok || !data.pair) {
             throw new Error(data.error ?? "AI 词条生成失败");
           }

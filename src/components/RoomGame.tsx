@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertDialog,
@@ -19,7 +19,6 @@ import { AI_GENERATING_SUMMARY, useRoomLogic } from "@/hooks/useRoomLogic";
 import { useCategorySearch } from "@/hooks/useCategorySearch";
 import { trackEvent } from "@/lib/umami";
 import { supabase } from "@/lib/supabase";
-import type { RoomRow, PlayerRow } from "@/hooks/useRoomData";
 
 const SESSION_KEY = "undercover.session.id";
 const randomSessionId = () => {
@@ -27,13 +26,6 @@ const randomSessionId = () => {
 };
 const clamp = (value: number, min: number, max: number) => {
   return Math.min(Math.max(value, min), max);
-};
-const detectWinner = (players: PlayerRow[]) => {
-  const aliveUndercover = players.filter((player) => player.is_alive && player.is_undercover).length;
-  const aliveCivilian = players.filter((player) => player.is_alive && !player.is_undercover).length;
-  if (aliveUndercover === 0) return "平民" as const;
-  if (aliveUndercover >= aliveCivilian) return "卧底" as const;
-  return null;
 };
 
 type RoomGameProps = {
@@ -47,46 +39,53 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   const [sessionId, setSessionId] = useState("");
   const [wordVisible, setWordVisible] = useState(false);
   const [voteTargetId, setVoteTargetId] = useState<string>("");
-  const [editableCategory, setEditableCategory] = useState("");
-  const [editableVoteDurationSeconds, setEditableVoteDurationSeconds] = useState(60);
-  const [nowMs, setNowMs] = useState(Date.now());
+  const [editableCategory, setEditableCategory] = useState<string | null>(null);
+  const [editableVoteDurationSeconds, setEditableVoteDurationSeconds] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(0);
   const [roomCategorySearchOpen, setRoomCategorySearchOpen] = useState(false);
-  const [roomCategorySearchQuery, setRoomCategorySearchQuery] = useState("");
+  const [roomCategorySearchQuery, setRoomCategorySearchQuery] = useState<string | null>(null);
   const [showSyncToast, setShowSyncToast] = useState(false);
-  const [forcedExitNotice, setForcedExitNotice] = useState("");
 
   const { room, players, votes, loading: roomLoading, syncing: roomSyncing, error: roomError, loadRoomData } =
-    useRoomData(roomId, sessionId);
+    useRoomData(roomId);
   const { categories, buildCategorySuggestions } = useCategorySearch();
-  const roomLogic = useRoomLogic(sessionId, room, players, categories, {
+  const roomLogic = useRoomLogic(sessionId, room, players, {
     refreshRoom: () => loadRoomData(roomId, false),
   });
 
   useEffect(() => {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (raw) {
-      setSessionId(raw);
-      return;
-    }
-    const newId = randomSessionId();
-    localStorage.setItem(SESSION_KEY, newId);
-    setSessionId(newId);
+    const timer = window.setTimeout(() => {
+      const raw = localStorage.getItem(SESSION_KEY);
+      if (raw) {
+        setSessionId(raw);
+        return;
+      }
+      const newId = randomSessionId();
+      localStorage.setItem(SESSION_KEY, newId);
+      setSessionId(newId);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(timer);
+    const updateNow = () => setNowMs(Date.now());
+    const initialTimer = window.setTimeout(updateNow, 0);
+    const timer = window.setInterval(updateNow, 1000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
-    if (!room || !sessionId) return;
+    if (!room?.status || !sessionId) return;
     trackEvent("room_status_change", {
       roomId,
       fromPageType: pageType,
       status: room.status,
       category: room.category,
     });
-  }, [roomId, room?.status, room?.id, room?.category, pageType, sessionId]);
+  }, [roomId, room?.status, room?.category, pageType, sessionId]);
 
   useEffect(() => {
     if (!room) return;
@@ -98,33 +97,58 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
     router.replace(`/room/${roomId}/${expectedPageType}`);
   }, [room, pageType, roomId, router]);
 
-  useEffect(() => {
-    if (room) {
-      setEditableCategory(room.category);
-      setRoomCategorySearchQuery(room.category);
-      setEditableVoteDurationSeconds(room.vote_duration_seconds ?? 60);
-    }
-  }, [room]);
-
   const forcedExitTimerRef = useRef<number | null>(null);
+  const currentPlayer = players.find((player) => player.session_id === sessionId) ?? null;
+  const isHost = room?.host_session_id === sessionId;
+  const alivePlayers = players.filter((player) => player.is_alive);
+  const voteCandidateIds = room?.vote_candidate_ids ?? [];
+  const voteScopePlayers =
+    voteCandidateIds.length === 0
+      ? alivePlayers
+      : alivePlayers.filter((player) => voteCandidateIds.includes(player.id));
+  const eligibleVoters =
+    voteCandidateIds.length === 0
+      ? alivePlayers
+      : alivePlayers.filter((player) => !voteCandidateIds.includes(player.id));
+  const voteDeadlineMs = !room?.vote_deadline_at ? null : Date.parse(room.vote_deadline_at);
+  const normalizedVoteDeadlineMs =
+    voteDeadlineMs == null || Number.isNaN(voteDeadlineMs) ? null : voteDeadlineMs;
+  const remainingVoteSeconds =
+    normalizedVoteDeadlineMs == null ? null : Math.max(0, Math.ceil((normalizedVoteDeadlineMs - nowMs) / 1000));
+  const votedCount = new Set(
+    votes
+      .filter((vote) => eligibleVoters.some((player) => player.id === vote.voter_player_id))
+      .map((vote) => vote.voter_player_id)
+  ).size;
+  const canCurrentPlayerVote = !!currentPlayer?.is_alive && eligibleVoters.some((player) => player.id === currentPlayer.id);
+  const tieCandidatePlayers =
+    voteCandidateIds.length === 0
+      ? []
+      : alivePlayers.filter((player) => voteCandidateIds.includes(player.id));
+  const rotatedPlayers =
+    players.length <= 1
+      ? players
+      : (() => {
+          const sorted = [...players].sort((a, b) => a.seat_no - b.seat_no);
+          const rotation = room ? Math.max(room.round_number - 1, 0) % sorted.length : 0;
+          return [...sorted.slice(rotation), ...sorted.slice(0, rotation)];
+        })();
+  const roomCategoryInputValue = roomCategorySearchQuery ?? room?.category ?? "";
+  const editableCategoryValue = editableCategory ?? room?.category ?? "";
+  const editableVoteDurationValue = editableVoteDurationSeconds ?? room?.vote_duration_seconds ?? 60;
+  const roomCategorySuggestions = buildCategorySuggestions(roomCategoryInputValue);
+  const forcedExitNotice =
+    room && sessionId && players.length > 0 && !players.some((player) => player.session_id === sessionId)
+      ? "你已被房主移出房间，正在返回大厅。"
+      : "";
 
   useEffect(() => {
-    if (!roomId || !room || !sessionId) return;
-    if (players.length === 0) return;
-
-    const stillInRoom = players.some((player) => player.session_id === sessionId);
-    if (stillInRoom || forcedExitTimerRef.current != null) return;
-
-    const notice = "你已被房主移出房间，正在返回大厅。";
-    setForcedExitNotice(notice);
-
-    // Best-effort cleanup to ensure this session has no lingering player row in the room.
+    if (!forcedExitNotice || !roomId || !sessionId || forcedExitTimerRef.current != null) return;
     void supabase.from("players").delete().eq("room_id", roomId).eq("session_id", sessionId);
-
     forcedExitTimerRef.current = window.setTimeout(() => {
       router.replace("/");
     }, 1200);
-  }, [roomId, room, players, sessionId, router, roomLogic.setError]);
+  }, [forcedExitNotice, roomId, sessionId, router]);
 
   useEffect(() => {
     return () => {
@@ -133,65 +157,6 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
       }
     };
   }, []);
-
-  const currentPlayer = useMemo(() => players.find((p) => p.session_id === sessionId) ?? null, [players, sessionId]);
-  const isHost = useMemo(() => room?.host_session_id === sessionId, [room, sessionId]);
-  const alivePlayers = useMemo(() => players.filter((p) => p.is_alive), [players]);
-
-  const voteScopePlayers = useMemo(() => {
-    if (!room?.vote_candidate_ids || room.vote_candidate_ids.length === 0) {
-      return alivePlayers;
-    }
-    const scope = new Set(room.vote_candidate_ids);
-    return alivePlayers.filter((p) => scope.has(p.id));
-  }, [alivePlayers, room?.vote_candidate_ids]);
-
-  const eligibleVoters = useMemo(() => {
-    if (!room?.vote_candidate_ids || room.vote_candidate_ids.length === 0) {
-      return alivePlayers;
-    }
-    const candidateSet = new Set(room.vote_candidate_ids);
-    return alivePlayers.filter((p) => !candidateSet.has(p.id));
-  }, [alivePlayers, room?.vote_candidate_ids]);
-
-  const voteDeadlineMs = useMemo(() => {
-    if (!room?.vote_deadline_at) return null;
-    const parsed = Date.parse(room.vote_deadline_at);
-    return Number.isNaN(parsed) ? null : parsed;
-  }, [room?.vote_deadline_at]);
-
-  const remainingVoteSeconds = useMemo(() => {
-    if (!voteDeadlineMs) return null;
-    return Math.max(0, Math.ceil((voteDeadlineMs - nowMs) / 1000));
-  }, [voteDeadlineMs, nowMs]);
-
-  const votedCount = useMemo(() => {
-    const eligibleSet = new Set(eligibleVoters.map((p) => p.id));
-    return new Set(votes.filter((v) => eligibleSet.has(v.voter_player_id)).map((v) => v.voter_player_id)).size;
-  }, [votes, eligibleVoters]);
-
-  const canCurrentPlayerVote = useMemo(() => {
-    if (!currentPlayer || !currentPlayer.is_alive) return false;
-    return eligibleVoters.some((p) => p.id === currentPlayer.id);
-  }, [currentPlayer, eligibleVoters]);
-
-  const tieCandidatePlayers = useMemo(() => {
-    if (!room?.vote_candidate_ids || room.vote_candidate_ids.length === 0) return [] as PlayerRow[];
-    const set = new Set(room.vote_candidate_ids);
-    return alivePlayers.filter((p) => set.has(p.id));
-  }, [room?.vote_candidate_ids, alivePlayers]);
-
-  const rotatedPlayers = useMemo(() => {
-    if (players.length <= 1) return players;
-    const sorted = [...players].sort((a, b) => a.seat_no - b.seat_no);
-    const rotation = room ? Math.max(room.round_number - 1, 0) % sorted.length : 0;
-    return [...sorted.slice(rotation), ...sorted.slice(0, rotation)];
-  }, [players, room]);
-
-  const roomCategorySuggestions = useMemo(
-    () => buildCategorySuggestions(roomCategorySearchQuery),
-    [buildCategorySuggestions, roomCategorySearchQuery]
-  );
 
   const autoPublishingRef = useRef(false);
   const syncToastShownAtRef = useRef<number | null>(null);
@@ -337,10 +302,10 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                 <div className="inline-row">
                   <input
                     type="text"
-                    value={roomCategorySearchQuery}
+                    value={roomCategoryInputValue}
                     onChange={(event) => {
                       setRoomCategorySearchQuery(event.target.value);
-                      setEditableCategory(event.target.value.trim() || editableCategory);
+                      setEditableCategory(event.target.value);
                     }}
                     onFocus={() => setRoomCategorySearchOpen(true)}
                     placeholder="搜索并修改房间类别"
@@ -348,7 +313,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   <button
                     type="button"
                     className="btn ghost"
-                    onClick={() => roomLogic.updateRoomCategory(roomId, editableCategory)}
+                    onClick={() => roomLogic.updateRoomCategory(roomId, editableCategoryValue)}
                     disabled={roomLogic.busy}
                   >
                     保存类别
@@ -380,7 +345,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                         backgroundColor: "#fafafa",
                       }}
                     >
-                      {roomCategorySearchQuery.trim() ? "模糊匹配结果" : "Top10 热门种类词"}
+                      {roomCategoryInputValue.trim() ? "模糊匹配结果" : "Top10 热门种类词"}
                     </div>
 
                     {roomCategorySuggestions.map((item) => (
@@ -393,7 +358,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                           padding: "8px 12px",
                           border: "none",
                           borderBottom: "1px solid #eee",
-                          backgroundColor: editableCategory === item.subcategoryDisplayName ? "#e8f4f8" : "#fff",
+                          backgroundColor: editableCategoryValue === item.subcategoryDisplayName ? "#e8f4f8" : "#fff",
                           cursor: "pointer",
                         }}
                         onClick={() => {
@@ -411,7 +376,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                       </button>
                     ))}
 
-                    {roomCategorySearchQuery.trim() && (
+                    {roomCategoryInputValue.trim() && (
                       <button
                         type="button"
                         style={{
@@ -424,12 +389,13 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                           color: "#1d4ed8",
                         }}
                         onClick={() => {
-                          const custom = roomCategorySearchQuery.trim();
+                          const custom = roomCategoryInputValue.trim();
                           setEditableCategory(custom);
+                          setRoomCategorySearchQuery(custom);
                           setRoomCategorySearchOpen(false);
                         }}
                       >
-                        使用"{roomCategorySearchQuery.trim()}"作为自定义类别
+                        使用“{roomCategoryInputValue.trim()}”作为自定义类别
                       </button>
                     )}
                   </div>
@@ -443,14 +409,14 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   type="number"
                   min={15}
                   max={600}
-                  value={editableVoteDurationSeconds}
+                  value={editableVoteDurationValue}
                   onChange={(event) => setEditableVoteDurationSeconds(clamp(Number(event.target.value) || 15, 15, 600))}
                   placeholder="投票时长（秒）"
                 />
                 <button
                   type="button"
                   className="btn ghost"
-                  onClick={() => roomLogic.updateVoteDuration(roomId, editableVoteDurationSeconds)}
+                  onClick={() => roomLogic.updateVoteDuration(roomId, editableVoteDurationValue)}
                   disabled={roomLogic.busy}
                 >
                   保存投票时长
@@ -610,7 +576,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
 
         <div className="notice-toast-stack">
           {forcedExitNotice && (
-            <NoticeToast type="error" message={forcedExitNotice} onClose={() => setForcedExitNotice("")} />
+            <NoticeToast type="error" message={forcedExitNotice} onClose={() => {}} />
           )}
           {showSyncToast && (
             <NoticeToast

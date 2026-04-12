@@ -1,6 +1,5 @@
 "use client";
 
-import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createContext, useContext, ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
 
@@ -200,6 +199,5 @@ export const useRoom = () => {
 };
 
 export const RoomProvider = ({ children }: { children: ReactNode }) => {
-  // This provider will be used if we decide to share room state across multiple components
-  return <>{children}</>;
+  return children;
 };

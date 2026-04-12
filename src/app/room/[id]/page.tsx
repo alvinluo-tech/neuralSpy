@@ -49,7 +49,7 @@ export default function RoomPage() {
 
         const room = data as RoomRow;
         navigateByStatus(room.status);
-      } catch (err) {
+      } catch {
         setError("加载房间失败");
       }
     };
