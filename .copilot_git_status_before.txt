@@ -1,0 +1,2 @@
+﻿## main...origin/main [gone]
+?? .copilot_git_status_before.txt
