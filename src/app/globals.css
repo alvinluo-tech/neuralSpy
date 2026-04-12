@@ -94,6 +94,40 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.entry-choice-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.entry-single-grid {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.entry-option-card {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.entry-option-card .hint {
+  margin-bottom: 16px;
+}
+
+.entry-form-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.entry-form-head h2 {
+  margin-bottom: 0;
+}
+
 .panel,
 .reveal-panel {
   padding: 20px;
@@ -487,6 +521,11 @@ button:focus {
 
   .actions-row,
   .inline-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .entry-form-head {
     flex-direction: column;
     align-items: stretch;
   }

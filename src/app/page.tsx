@@ -3,6 +3,17 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { pinyin } from "pinyin-pro";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
 
 type RoomRow = {
@@ -86,6 +97,20 @@ type CategorySuggestion = {
   categoryInitials: string;
   subcategoryInitials: string;
   isRandomOption?: boolean;
+};
+
+type EntryMode = "create" | "join";
+
+type ConfirmDialogOptions = {
+  title: string;
+  description: string;
+  confirmText: string;
+  cancelText?: string;
+  tone?: "neutral" | "danger";
+};
+
+type ConfirmDialogState = ConfirmDialogOptions & {
+  open: boolean;
 };
 
 const SESSION_KEY = "undercover.session.id";
@@ -204,6 +229,7 @@ const toPinyinInitials = (value: string) => {
 
 export default function Home() {
   const [sessionId, setSessionId] = useState("");
+  const [entryMode, setEntryMode] = useState<EntryMode | null>(null);
   const [nickname, setNickname] = useState("");
   const [joinCode, setJoinCode] = useState("");
 
@@ -233,7 +259,16 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>({
+    open: false,
+    title: "",
+    description: "",
+    confirmText: "确认",
+    cancelText: "取消",
+    tone: "neutral",
+  });
   const autoPublishingRef = useRef(false);
+  const confirmResolverRef = useRef<((accepted: boolean) => void) | null>(null);
 
   useEffect(() => {
     if (room) {
@@ -410,6 +445,49 @@ export default function Home() {
     [buildCategorySuggestions, roomCategorySearchQuery],
   );
 
+  const askForConfirmation = useCallback((options: ConfirmDialogOptions) => {
+    return new Promise<boolean>((resolve) => {
+      confirmResolverRef.current = resolve;
+      setConfirmDialog({
+        open: true,
+        title: options.title,
+        description: options.description,
+        confirmText: options.confirmText,
+        cancelText: options.cancelText ?? "取消",
+        tone: options.tone ?? "neutral",
+      });
+    });
+  }, []);
+
+  const resolveConfirmation = useCallback((accepted: boolean) => {
+    setConfirmDialog((prev) => ({ ...prev, open: false }));
+    if (confirmResolverRef.current) {
+      confirmResolverRef.current(accepted);
+      confirmResolverRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (confirmResolverRef.current) {
+        confirmResolverRef.current(false);
+        confirmResolverRef.current = null;
+      }
+    };
+  }, []);
+
+  const resetRoomView = useCallback((nextMessage: string) => {
+    setRoomId(null);
+    setEntryMode(null);
+    setRoom(null);
+    setPlayers([]);
+    setVotes([]);
+    setWordVisible(false);
+    setVoteTargetId("");
+    setError("");
+    setMessage(nextMessage);
+  }, []);
+
   const loadRoomData = useCallback(
     async (targetRoomId: string) => {
       const roomRes = await supabase
@@ -419,6 +497,10 @@ export default function Home() {
         .single();
 
       if (roomRes.error) {
+        if (roomRes.error.code === "PGRST116") {
+          resetRoomView("房间已被解散。");
+          return;
+        }
         setError(roomRes.error.message);
         return;
       }
@@ -455,7 +537,7 @@ export default function Home() {
         setVotes([]);
       }
     },
-    [],
+    [resetRoomView],
   );
 
   useEffect(() => {
@@ -1022,15 +1104,59 @@ export default function Home() {
     }
   }, [room]);
 
-  const leaveRoom = () => {
-    setRoomId(null);
-    setRoom(null);
-    setPlayers([]);
-    setVotes([]);
-    setWordVisible(false);
-    setVoteTargetId("");
-    setMessage("已退出房间。");
+  const leaveRoom = async () => {
+    if (!room) {
+      resetRoomView("已退出房间。");
+      return;
+    }
+
+    const leaveConfirmed = await askForConfirmation(
+      isHost
+        ? {
+            title: "确认解散房间？",
+            description: "你是房主，退出后将解散整个房间并清空本局数据。",
+            confirmText: "确认解散",
+            cancelText: "再想想",
+            tone: "danger",
+          }
+        : {
+            title: "确认退出房间？",
+            description: "退出后你将离开当前房间。",
+            confirmText: "确认退出",
+            cancelText: "取消",
+            tone: "neutral",
+          },
+    );
+
+    if (!leaveConfirmed) return;
+
+    setBusy(true);
     setError("");
+
+    try {
+      if (isHost) {
+        const dissolveRes = await supabase.from("rooms").delete().eq("id", room.id);
+        if (dissolveRes.error) {
+          throw new Error(dissolveRes.error.message);
+        }
+
+        resetRoomView("你已退出并解散房间。");
+        return;
+      }
+
+      if (currentPlayer) {
+        const leaveRes = await supabase.from("players").delete().eq("id", currentPlayer.id);
+        if (leaveRes.error) {
+          throw new Error(leaveRes.error.message);
+        }
+      }
+
+      resetRoomView("已退出房间。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "退出房间失败");
+    } finally {
+      setBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -1041,15 +1167,8 @@ export default function Home() {
     if (stillInRoom) return;
 
     // If current session is no longer in player list, this user has been removed.
-    setRoomId(null);
-    setRoom(null);
-    setPlayers([]);
-    setVotes([]);
-    setWordVisible(false);
-    setVoteTargetId("");
-    setError("");
-    setMessage("你已被房主移出房间。");
-  }, [roomId, room, players, sessionId]);
+    resetRoomView("你已被房主移出房间。");
+  }, [roomId, room, players, sessionId, resetRoomView]);
 
   const updateRoomCategory = async () => {
     if (!room || !isHost) return;
@@ -1119,6 +1238,15 @@ export default function Home() {
       setError("不能踢出自己。");
       return;
     }
+
+    const kickConfirmed = await askForConfirmation({
+      title: "确认踢出玩家？",
+      description: `确认将玩家 #${targetPlayer.seat_no}（${targetPlayer.name}）移出房间吗？`,
+      confirmText: "确认踢出",
+      cancelText: "取消",
+      tone: "danger",
+    });
+    if (!kickConfirmed) return;
 
     setBusy(true);
     setError("");
@@ -1190,10 +1318,36 @@ export default function Home() {
           </p>
         </section>
 
-        {!roomId && (
-          <section className="panel-grid entry-grid">
+        {!roomId && entryMode === null && (
+          <section className="panel-grid entry-choice-grid">
+            <article className="panel entry-option-card">
+              <h2>创建新房间</h2>
+              <p className="hint">成为房主并设置类别、卧底人数和投票规则。</p>
+              <button type="button" className="btn primary" onClick={() => setEntryMode("create")}>
+                我来创建
+              </button>
+            </article>
+
+            <article className="panel entry-option-card">
+              <h2>加入已有房间</h2>
+              <p className="hint">输入邀请码，快速加入朋友已经创建的房间。</p>
+              <button type="button" className="btn" onClick={() => setEntryMode("join")}>
+                我去加入
+              </button>
+            </article>
+          </section>
+        )}
+
+        {!roomId && entryMode === "create" && (
+          <section className="panel-grid entry-grid entry-single-grid">
             <article className="panel">
-              <h2>创建房间</h2>
+              <div className="entry-form-head">
+                <h2>创建房间</h2>
+                <button type="button" className="btn ghost" onClick={() => setEntryMode(null)}>
+                  返回选择
+                </button>
+              </div>
+
               <label>
                 你的昵称
                 <input
@@ -1359,9 +1513,19 @@ export default function Home() {
                 {busy ? "处理中..." : "创建房间"}
               </button>
             </article>
+          </section>
+        )}
 
+        {!roomId && entryMode === "join" && (
+          <section className="panel-grid entry-grid entry-single-grid">
             <article className="panel">
-              <h2>加入房间</h2>
+              <div className="entry-form-head">
+                <h2>加入房间</h2>
+                <button type="button" className="btn ghost" onClick={() => setEntryMode(null)}>
+                  返回选择
+                </button>
+              </div>
+
               <label>
                 你的昵称
                 <input
@@ -1380,7 +1544,7 @@ export default function Home() {
                   placeholder="例如：Q8K2MX"
                 />
               </label>
-              <button type="button" className="btn" onClick={joinRoom} disabled={busy}>
+              <button type="button" className="btn primary" onClick={joinRoom} disabled={busy}>
                 {busy ? "处理中..." : "加入房间"}
               </button>
             </article>
@@ -1674,6 +1838,36 @@ export default function Home() {
 
         {error && <p className="notice error">{error}</p>}
         {message && <p className="notice success">{message}</p>}
+
+        <AlertDialog
+          open={confirmDialog.open}
+          onOpenChange={(open) => {
+            if (!open) resolveConfirmation(false);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{confirmDialog.title}</AlertDialogTitle>
+              <AlertDialogDescription>{confirmDialog.description}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel asChild>
+                <Button type="button" variant="outline" onClick={() => resolveConfirmation(false)}>
+                  {confirmDialog.cancelText}
+                </Button>
+              </AlertDialogCancel>
+              <AlertDialogAction asChild>
+                <Button
+                  type="button"
+                  variant={confirmDialog.tone === "danger" ? "danger" : "default"}
+                  onClick={() => resolveConfirmation(true)}
+                >
+                  {confirmDialog.confirmText}
+                </Button>
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </main>
     </div>
   );
