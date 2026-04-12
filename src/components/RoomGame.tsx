@@ -28,6 +28,15 @@ const clamp = (value: number, min: number, max: number) => {
   return Math.min(Math.max(value, min), max);
 };
 
+const resolveWinnerRole = (players: Array<{ is_alive: boolean; is_undercover: boolean }>) => {
+  const aliveUndercover = players.filter((player) => player.is_alive && player.is_undercover).length;
+  const aliveCivilian = players.filter((player) => player.is_alive && !player.is_undercover).length;
+
+  if (aliveUndercover === 0) return "civilian";
+  if (aliveUndercover >= aliveCivilian) return "undercover";
+  return "unknown";
+};
+
 type RoomGameProps = {
   roomId: string;
   pageType: "lobby" | "play" | "result";
@@ -48,7 +57,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
 
   const { room, players, votes, loading: roomLoading, syncing: roomSyncing, error: roomError, loadRoomData } =
     useRoomData(roomId);
-  const { categories, buildCategorySuggestions } = useCategorySearch();
+  const { categories, buildCategorySuggestions, refreshCategoryUsage } = useCategorySearch();
   const roomLogic = useRoomLogic(sessionId, room, players, {
     refreshRoom: () => loadRoomData(roomId, false),
   });
@@ -86,6 +95,11 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
       category: room.category,
     });
   }, [roomId, room?.status, room?.category, pageType, sessionId]);
+
+  useEffect(() => {
+    if (!room?.id) return;
+    void refreshCategoryUsage();
+  }, [room?.id, room?.round_number, refreshCategoryUsage]);
 
   useEffect(() => {
     if (!room) return;
@@ -159,11 +173,40 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   }, []);
 
   const autoPublishingRef = useRef(false);
+  const gameResultTrackedKeyRef = useRef<string | null>(null);
   const syncToastShownAtRef = useRef<number | null>(null);
   const syncToastDelayTimerRef = useRef<number | null>(null);
   const syncToastHideTimerRef = useRef<number | null>(null);
   const isGeneratingOverlayVisible =
     roomLogic.generatingWords || room?.result_summary === AI_GENERATING_SUMMARY;
+
+  useEffect(() => {
+    if (!room || pageType !== "result" || room.status !== "finished" || !isHost) return;
+
+    const spyCount = players.filter((player) => player.is_undercover).length;
+    const winnerRole = resolveWinnerRole(players);
+    const trackingKey = `game_result_detail:${room.id}:${room.round_number}:${winnerRole}:${spyCount}`;
+
+    if (gameResultTrackedKeyRef.current === trackingKey) return;
+
+    if (typeof window !== "undefined") {
+      if (sessionStorage.getItem(trackingKey)) {
+        gameResultTrackedKeyRef.current = trackingKey;
+        return;
+      }
+      sessionStorage.setItem(trackingKey, "1");
+    }
+
+    gameResultTrackedKeyRef.current = trackingKey;
+    trackEvent("game_result_detail", {
+      roomId: room.id,
+      winnerRole,
+      totalRounds: room.round_number,
+      spyCount,
+      voteEnabled: room.vote_enabled,
+      voteDurationSeconds: room.vote_duration_seconds ?? 60,
+    });
+  }, [room, pageType, isHost, players]);
 
   useEffect(() => {
     const SHOW_DELAY_MS = 450;

@@ -27,12 +27,15 @@
 
 ## 3. 事件埋点
 
-### 3.1 page_view
+### 3.1 player_session_started
 
-- 调用位置：src/app/page.tsx:66
-- 触发时机：首页 sessionId 初始化完成后
+- 调用位置：src/app/page.tsx（session 初始化 effect）
+- 触发时机：sessionId 就绪后，且每个 sessionId 仅上报一次
 - 上报字段：
   - page: home
+
+说明：
+- 该事件用于替代冗余的手动 page_view，避免与 useTrackPage 页面浏览统计重叠。
 
 ### 3.2 room_created
 
@@ -58,6 +61,44 @@
   - status
   - category
 
+### 3.5 Grok_API_Success
+
+- 调用位置：src/hooks/useRoomLogic.ts（startRound -> 调用 /api/grok/words 成功后）
+- 触发时机：每次 Grok 接口返回成功且拿到词对时
+- 上报字段：
+  - category
+  - attempt
+  - is_random_all_mode
+
+说明：
+- 当前逻辑会按成功调用次数上报，用于估算 AI 侧调用频率和成本。
+
+### 3.6 Room_Config
+
+- 调用位置：src/hooks/useRoomLogic.ts（startRound 成功后）
+- 触发时机：开局完成并发词后
+- 上报字段：
+  - players_count
+  - has_whiteboard（当前固定为 false）
+  - vote_enabled
+  - vote_duration_seconds
+  - undercover_count
+  - category
+
+### 3.7 game_result_detail
+
+- 调用位置：src/components/RoomGame.tsx（结果页逻辑）
+- 触发时机：结算页加载且房间状态为 finished 时
+- 上报范围：仅房主上报（避免同局被多位玩家重复计数）
+- 去重策略：基于 sessionStorage 的单局去重键（roomId + round + winnerRole + spyCount）
+- 上报字段：
+  - roomId
+  - winnerRole（undercover / civilian / unknown）
+  - totalRounds
+  - spyCount
+  - voteEnabled
+  - voteDurationSeconds
+
 ## 4. 埋点工具函数清单
 
 - trackPageView：src/lib/umami.ts:43
@@ -65,11 +106,21 @@
 - identifySession：src/lib/umami.ts:82
 
 说明：
-- identifySession 当前仅定义，尚未在业务代码中调用。
+- identifySession 已在 src/app/page.tsx 启用，会在 sessionId 就绪后上报，并绑定可用昵称。
 
 ## 5. 当前事件名清单
 
-- page_view
+- player_session_started
 - room_created
 - room_joined
 - room_status_change
+- Grok_API_Success
+- Room_Config
+- game_result_detail
+
+## 6. 冗余优化结论
+
+- 已删除冗余手动 page_view，改为 player_session_started（一次性事件）。
+- 页面访问量统一由 useTrackPage/trackPageView 负责，避免口径重复。
+- identifySession 已启用，可串联单个用户会话行为路径。
+- room_status_change、Room_Config、game_result_detail 分别用于状态流、配置偏好、平衡性分析，目标不重叠，建议保留。

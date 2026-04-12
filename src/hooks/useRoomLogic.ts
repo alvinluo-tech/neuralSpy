@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { trackEvent } from "@/lib/umami";
 import type { Category, Subcategory } from "./useCategorySearch";
 import type { RoomRow, PlayerRow } from "./useRoomData";
 
@@ -219,6 +220,12 @@ export const useRoomLogic = (
             throw new Error(data.error ?? "AI 词条生成失败");
           }
 
+          trackEvent("Grok_API_Success", {
+            category: pickedCategory,
+            attempt: attempt + 1,
+            is_random_all_mode: isRandomAllMode,
+          });
+
           const pairKey = normalizePairKey(data.pair);
           if (usedKeys.has(pairKey)) {
             continue;
@@ -290,6 +297,15 @@ export const useRoomLogic = (
             ? `本局已开，系统随机类别：${pickedCategory}。AI 已生成 1 组词并发词。`
             : "本局已开，AI 仅生成 1 组词并已发词。"
         );
+
+        trackEvent("Room_Config", {
+          players_count: players.length,
+          has_whiteboard: false,
+          vote_enabled: room.vote_enabled,
+          vote_duration_seconds: room.vote_duration_seconds ?? 60,
+          undercover_count: currentUndercoverCount,
+          category: pickedCategory,
+        });
 
         return { success: true, message: "开局成功" };
       } catch (err) {

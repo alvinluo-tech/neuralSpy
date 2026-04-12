@@ -6,9 +6,10 @@ import { supabase } from "@/lib/supabase";
 import { useCategorySearch } from "@/hooks/useCategorySearch";
 import { useTrackPage } from "@/hooks/useTrackPage";
 import { NoticeToast } from "@/components/ui/notice-toast";
-import { trackEvent } from "@/lib/umami";
+import { identifySession, trackEvent } from "@/lib/umami";
 
 const SESSION_KEY = "undercover.session.id";
+const PLAYER_SESSION_STARTED_TRACK_PREFIX = "undercover.player.session.started.tracked.";
 const randomCode = () => {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
@@ -60,11 +61,23 @@ export default function HomePage() {
     setSessionId(newId);
   }, []);
 
-  // Track custom event
+  // Identify session in Umami and track session start once per session id.
   useEffect(() => {
     if (!sessionId) return;
-    trackEvent("page_view", { page: "home" });
-  }, [sessionId]);
+
+    const trimmedNickname = nickname.trim();
+    identifySession(sessionId, {
+      nickname: trimmedNickname || undefined,
+    });
+
+    const sessionStartKey = `${PLAYER_SESSION_STARTED_TRACK_PREFIX}${sessionId}`;
+    if (sessionStorage.getItem(sessionStartKey)) return;
+
+    trackEvent("player_session_started", {
+      page: "home",
+    });
+    sessionStorage.setItem(sessionStartKey, "1");
+  }, [sessionId, nickname]);
 
   const createRoom = async () => {
     if (!sessionId) return;

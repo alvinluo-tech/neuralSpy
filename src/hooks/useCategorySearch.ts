@@ -72,6 +72,34 @@ export const useCategorySearch = () => {
   const [categoryUsageMap, setCategoryUsageMap] = useState<Record<string, number>>({});
   const [searchQuery, setSearchQuery] = useState("");
 
+  const refreshCategoryUsage = useCallback(async () => {
+    const [roomsRes, historyRes] = await Promise.all([
+      supabase.from("rooms").select("category"),
+      supabase.from("room_word_history").select("category"),
+    ]);
+
+    if (roomsRes.error) {
+      console.error("Failed to load rooms category usage:", roomsRes.error);
+    }
+    if (historyRes.error) {
+      console.error("Failed to load room_word_history category usage:", historyRes.error);
+    }
+
+    const usage: Record<string, number> = {};
+    const rows = [
+      ...((roomsRes.data ?? []) as CategoryUsageRow[]),
+      ...((historyRes.data ?? []) as CategoryUsageRow[]),
+    ];
+
+    rows.forEach((row) => {
+      const key = row.category?.trim();
+      if (!key) return;
+      usage[key] = (usage[key] ?? 0) + 1;
+    });
+
+    setCategoryUsageMap(usage);
+  }, []);
+
   useEffect(() => {
     const fetchCategories = async () => {
       try {
@@ -87,29 +115,8 @@ export const useCategorySearch = () => {
   }, []);
 
   useEffect(() => {
-    const fetchCategoryUsage = async () => {
-      const [roomsRes, historyRes] = await Promise.all([
-        supabase.from("rooms").select("category"),
-        supabase.from("room_word_history").select("category"),
-      ]);
-
-      const usage: Record<string, number> = {};
-      const rows = [
-        ...((roomsRes.data ?? []) as CategoryUsageRow[]),
-        ...((historyRes.data ?? []) as CategoryUsageRow[]),
-      ];
-
-      rows.forEach((row) => {
-        const key = row.category?.trim();
-        if (!key) return;
-        usage[key] = (usage[key] ?? 0) + 1;
-      });
-
-      setCategoryUsageMap(usage);
-    };
-
-    void fetchCategoryUsage();
-  }, []);
+    void refreshCategoryUsage();
+  }, [refreshCategoryUsage]);
 
   const allCategorySuggestions = useMemo(() => {
     return categories.flatMap((category) =>
@@ -208,6 +215,7 @@ export const useCategorySearch = () => {
   return {
     categories,
     categoryUsageMap,
+    refreshCategoryUsage,
     searchQuery,
     setSearchQuery,
     suggestions,
