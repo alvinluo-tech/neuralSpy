@@ -1,0 +1,673 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { NoticeToast } from "@/components/ui/notice-toast";
+import { useRoomData } from "@/hooks/useRoomData";
+import { AI_GENERATING_SUMMARY, useRoomLogic } from "@/hooks/useRoomLogic";
+import { useCategorySearch } from "@/hooks/useCategorySearch";
+import { trackEvent } from "@/lib/umami";
+import { supabase } from "@/lib/supabase";
+import type { RoomRow, PlayerRow } from "@/hooks/useRoomData";
+
+const SESSION_KEY = "undercover.session.id";
+const randomSessionId = () => {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+const clamp = (value: number, min: number, max: number) => {
+  return Math.min(Math.max(value, min), max);
+};
+const detectWinner = (players: PlayerRow[]) => {
+  const aliveUndercover = players.filter((player) => player.is_alive && player.is_undercover).length;
+  const aliveCivilian = players.filter((player) => player.is_alive && !player.is_undercover).length;
+  if (aliveUndercover === 0) return "平民" as const;
+  if (aliveUndercover >= aliveCivilian) return "卧底" as const;
+  return null;
+};
+
+type RoomGameProps = {
+  roomId: string;
+  pageType: "lobby" | "play" | "result";
+};
+
+export function RoomGame({ roomId, pageType }: RoomGameProps) {
+  const router = useRouter();
+
+  const [sessionId, setSessionId] = useState("");
+  const [wordVisible, setWordVisible] = useState(false);
+  const [voteTargetId, setVoteTargetId] = useState<string>("");
+  const [editableCategory, setEditableCategory] = useState("");
+  const [editableVoteDurationSeconds, setEditableVoteDurationSeconds] = useState(60);
+  const [nowMs, setNowMs] = useState(Date.now());
+  const [roomCategorySearchOpen, setRoomCategorySearchOpen] = useState(false);
+  const [roomCategorySearchQuery, setRoomCategorySearchQuery] = useState("");
+  const [showSyncToast, setShowSyncToast] = useState(false);
+  const [forcedExitNotice, setForcedExitNotice] = useState("");
+
+  const { room, players, votes, loading: roomLoading, syncing: roomSyncing, error: roomError, loadRoomData } =
+    useRoomData(roomId, sessionId);
+  const { categories, buildCategorySuggestions } = useCategorySearch();
+  const roomLogic = useRoomLogic(sessionId, room, players, categories, {
+    refreshRoom: () => loadRoomData(roomId, false),
+  });
+
+  useEffect(() => {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (raw) {
+      setSessionId(raw);
+      return;
+    }
+    const newId = randomSessionId();
+    localStorage.setItem(SESSION_KEY, newId);
+    setSessionId(newId);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!room || !sessionId) return;
+    trackEvent("room_status_change", {
+      roomId,
+      fromPageType: pageType,
+      status: room.status,
+      category: room.category,
+    });
+  }, [roomId, room?.status, room?.id, room?.category, pageType, sessionId]);
+
+  useEffect(() => {
+    if (!room) return;
+
+    const expectedPageType: RoomGameProps["pageType"] =
+      room.status === "lobby" ? "lobby" : room.status === "finished" ? "result" : "play";
+
+    if (expectedPageType === pageType) return;
+    router.replace(`/room/${roomId}/${expectedPageType}`);
+  }, [room, pageType, roomId, router]);
+
+  useEffect(() => {
+    if (room) {
+      setEditableCategory(room.category);
+      setRoomCategorySearchQuery(room.category);
+      setEditableVoteDurationSeconds(room.vote_duration_seconds ?? 60);
+    }
+  }, [room]);
+
+  const forcedExitTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!roomId || !room || !sessionId) return;
+    if (players.length === 0) return;
+
+    const stillInRoom = players.some((player) => player.session_id === sessionId);
+    if (stillInRoom || forcedExitTimerRef.current != null) return;
+
+    const notice = "你已被房主移出房间，正在返回大厅。";
+    setForcedExitNotice(notice);
+
+    // Best-effort cleanup to ensure this session has no lingering player row in the room.
+    void supabase.from("players").delete().eq("room_id", roomId).eq("session_id", sessionId);
+
+    forcedExitTimerRef.current = window.setTimeout(() => {
+      router.replace("/");
+    }, 1200);
+  }, [roomId, room, players, sessionId, router, roomLogic.setError]);
+
+  useEffect(() => {
+    return () => {
+      if (forcedExitTimerRef.current != null) {
+        window.clearTimeout(forcedExitTimerRef.current);
+      }
+    };
+  }, []);
+
+  const currentPlayer = useMemo(() => players.find((p) => p.session_id === sessionId) ?? null, [players, sessionId]);
+  const isHost = useMemo(() => room?.host_session_id === sessionId, [room, sessionId]);
+  const alivePlayers = useMemo(() => players.filter((p) => p.is_alive), [players]);
+
+  const voteScopePlayers = useMemo(() => {
+    if (!room?.vote_candidate_ids || room.vote_candidate_ids.length === 0) {
+      return alivePlayers;
+    }
+    const scope = new Set(room.vote_candidate_ids);
+    return alivePlayers.filter((p) => scope.has(p.id));
+  }, [alivePlayers, room?.vote_candidate_ids]);
+
+  const eligibleVoters = useMemo(() => {
+    if (!room?.vote_candidate_ids || room.vote_candidate_ids.length === 0) {
+      return alivePlayers;
+    }
+    const candidateSet = new Set(room.vote_candidate_ids);
+    return alivePlayers.filter((p) => !candidateSet.has(p.id));
+  }, [alivePlayers, room?.vote_candidate_ids]);
+
+  const voteDeadlineMs = useMemo(() => {
+    if (!room?.vote_deadline_at) return null;
+    const parsed = Date.parse(room.vote_deadline_at);
+    return Number.isNaN(parsed) ? null : parsed;
+  }, [room?.vote_deadline_at]);
+
+  const remainingVoteSeconds = useMemo(() => {
+    if (!voteDeadlineMs) return null;
+    return Math.max(0, Math.ceil((voteDeadlineMs - nowMs) / 1000));
+  }, [voteDeadlineMs, nowMs]);
+
+  const votedCount = useMemo(() => {
+    const eligibleSet = new Set(eligibleVoters.map((p) => p.id));
+    return new Set(votes.filter((v) => eligibleSet.has(v.voter_player_id)).map((v) => v.voter_player_id)).size;
+  }, [votes, eligibleVoters]);
+
+  const canCurrentPlayerVote = useMemo(() => {
+    if (!currentPlayer || !currentPlayer.is_alive) return false;
+    return eligibleVoters.some((p) => p.id === currentPlayer.id);
+  }, [currentPlayer, eligibleVoters]);
+
+  const tieCandidatePlayers = useMemo(() => {
+    if (!room?.vote_candidate_ids || room.vote_candidate_ids.length === 0) return [] as PlayerRow[];
+    const set = new Set(room.vote_candidate_ids);
+    return alivePlayers.filter((p) => set.has(p.id));
+  }, [room?.vote_candidate_ids, alivePlayers]);
+
+  const rotatedPlayers = useMemo(() => {
+    if (players.length <= 1) return players;
+    const sorted = [...players].sort((a, b) => a.seat_no - b.seat_no);
+    const rotation = room ? Math.max(room.round_number - 1, 0) % sorted.length : 0;
+    return [...sorted.slice(rotation), ...sorted.slice(0, rotation)];
+  }, [players, room]);
+
+  const roomCategorySuggestions = useMemo(
+    () => buildCategorySuggestions(roomCategorySearchQuery),
+    [buildCategorySuggestions, roomCategorySearchQuery]
+  );
+
+  const autoPublishingRef = useRef(false);
+  const syncToastShownAtRef = useRef<number | null>(null);
+  const syncToastDelayTimerRef = useRef<number | null>(null);
+  const syncToastHideTimerRef = useRef<number | null>(null);
+  const isGeneratingOverlayVisible =
+    roomLogic.generatingWords || room?.result_summary === AI_GENERATING_SUMMARY;
+
+  useEffect(() => {
+    const SHOW_DELAY_MS = 450;
+    const MIN_VISIBLE_MS = 900;
+
+    if (roomSyncing) {
+      if (syncToastHideTimerRef.current != null) {
+        window.clearTimeout(syncToastHideTimerRef.current);
+        syncToastHideTimerRef.current = null;
+      }
+
+      if (!showSyncToast && syncToastDelayTimerRef.current == null) {
+        syncToastDelayTimerRef.current = window.setTimeout(() => {
+          syncToastShownAtRef.current = Date.now();
+          setShowSyncToast(true);
+          syncToastDelayTimerRef.current = null;
+        }, SHOW_DELAY_MS);
+      }
+      return;
+    }
+
+    if (syncToastDelayTimerRef.current != null) {
+      window.clearTimeout(syncToastDelayTimerRef.current);
+      syncToastDelayTimerRef.current = null;
+    }
+
+    if (!showSyncToast) return;
+
+    const shownAt = syncToastShownAtRef.current ?? Date.now();
+    const elapsed = Date.now() - shownAt;
+    const remain = Math.max(0, MIN_VISIBLE_MS - elapsed);
+
+    syncToastHideTimerRef.current = window.setTimeout(() => {
+      setShowSyncToast(false);
+      syncToastShownAtRef.current = null;
+      syncToastHideTimerRef.current = null;
+    }, remain);
+
+    return () => {
+      if (syncToastHideTimerRef.current != null) {
+        window.clearTimeout(syncToastHideTimerRef.current);
+        syncToastHideTimerRef.current = null;
+      }
+    };
+  }, [roomSyncing, showSyncToast]);
+
+  useEffect(() => {
+    return () => {
+      if (syncToastDelayTimerRef.current != null) {
+        window.clearTimeout(syncToastDelayTimerRef.current);
+      }
+      if (syncToastHideTimerRef.current != null) {
+        window.clearTimeout(syncToastHideTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!room || room.status !== "voting" || autoPublishingRef.current) return;
+
+    const voterCount = eligibleVoters.length;
+    const allVoted = voterCount > 0 && votedCount >= voterCount;
+    const deadlineReached = !!voteDeadlineMs && nowMs >= voteDeadlineMs;
+
+    if (!allVoted && !deadlineReached) return;
+
+    autoPublishingRef.current = true;
+    void roomLogic.publishVotingResult(roomId).finally(() => {
+      autoPublishingRef.current = false;
+    });
+  }, [room, eligibleVoters.length, votedCount, voteDeadlineMs, nowMs, roomLogic, roomId]);
+
+  if (!sessionId || roomLoading) {
+    return (
+      <div className="page-shell">
+        <main className="app-wrap">
+          <section className="hero-card">
+            <h1 className="hero-title">加载房间中...</h1>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (roomError || !room) {
+    return (
+      <div className="page-shell">
+        <main className="app-wrap">
+          <section className="hero-card">
+            <h1 className="hero-title" style={{ color: "red" }}>错误</h1>
+            <p>{roomError || "房间不存在"}</p>
+            <button className="btn primary" onClick={() => router.push("/")}>
+              返回首页
+            </button>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="page-shell">
+      <main className="app-wrap">
+        <section className="hero-card">
+          <p className="eyebrow">游戏房间 {room.code}</p>
+          <h1 className="hero-title">谁是卧底多人房间</h1>
+          <p className="hero-subtitle">
+            状态：
+            {room.status === "lobby" ? "大厅" : room.status === "playing" ? "游戏进行中" : room.status === "voting" ? "投票进行中" : "游戏结束"}
+          </p>
+        </section>
+
+        <section className="panel-grid room-grid">
+          <article className="panel">
+            <h2>房间信息</h2>
+            <div className="status-row">
+              <span className="status-pill">邀请码：{room.code}</span>
+              <span className="status-pill">
+                状态：
+                {room.status === "lobby" ? "大厅" : room.status === "playing" ? "游戏中" : room.status === "voting" ? "投票中" : "结束"}
+              </span>
+              <span className="status-pill">类别：{room.category}</span>
+            </div>
+            <p className="hint">局数：{room.round_number} · 投票轮次：{room.vote_round}</p>
+            <p className="hint">投票功能：{room.vote_enabled ? "开启" : "关闭"}</p>
+            <p className="hint">每轮限时：{room.vote_duration_seconds ?? 60} 秒</p>
+
+            {isHost && (
+              <div
+                className="room-category-editor"
+                style={{ position: "relative" }}
+                onBlur={() => {
+                  window.setTimeout(() => setRoomCategorySearchOpen(false), 120);
+                }}
+              >
+                <div className="inline-row">
+                  <input
+                    type="text"
+                    value={roomCategorySearchQuery}
+                    onChange={(event) => {
+                      setRoomCategorySearchQuery(event.target.value);
+                      setEditableCategory(event.target.value.trim() || editableCategory);
+                    }}
+                    onFocus={() => setRoomCategorySearchOpen(true)}
+                    placeholder="搜索并修改房间类别"
+                  />
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={() => roomLogic.updateRoomCategory(roomId, editableCategory)}
+                    disabled={roomLogic.busy}
+                  >
+                    保存类别
+                  </button>
+                </div>
+
+                {roomCategorySearchOpen && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: "100%",
+                      left: 0,
+                      right: 0,
+                      backgroundColor: "#fff",
+                      border: "1px solid #ccc",
+                      borderTop: "none",
+                      borderRadius: "0 0 4px 4px",
+                      maxHeight: "260px",
+                      overflowY: "auto",
+                      zIndex: 1000,
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: "8px 12px",
+                        fontSize: "12px",
+                        color: "#777",
+                        borderBottom: "1px solid #eee",
+                        backgroundColor: "#fafafa",
+                      }}
+                    >
+                      {roomCategorySearchQuery.trim() ? "模糊匹配结果" : "Top10 热门种类词"}
+                    </div>
+
+                    {roomCategorySuggestions.map((item) => (
+                      <button
+                        key={`room-${item.key}`}
+                        type="button"
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "8px 12px",
+                          border: "none",
+                          borderBottom: "1px solid #eee",
+                          backgroundColor: editableCategory === item.subcategoryDisplayName ? "#e8f4f8" : "#fff",
+                          cursor: "pointer",
+                        }}
+                        onClick={() => {
+                          setEditableCategory(item.subcategoryDisplayName);
+                          setRoomCategorySearchQuery(item.subcategoryDisplayName);
+                          setRoomCategorySearchOpen(false);
+                        }}
+                      >
+                        <div style={{ fontWeight: 600 }}>{item.subcategoryDisplayName}</div>
+                        <div style={{ fontSize: "12px", color: "#666" }}>
+                          {item.categoryDisplayName}
+                          {item.examples.length > 0 ? ` · 例：${item.examples.join(" vs ")}` : ""}
+                          {item.usageCount > 0 ? ` · 热度 ${item.usageCount}` : ""}
+                        </div>
+                      </button>
+                    ))}
+
+                    {roomCategorySearchQuery.trim() && (
+                      <button
+                        type="button"
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "10px 12px",
+                          border: "none",
+                          backgroundColor: "#f8fbff",
+                          cursor: "pointer",
+                          color: "#1d4ed8",
+                        }}
+                        onClick={() => {
+                          const custom = roomCategorySearchQuery.trim();
+                          setEditableCategory(custom);
+                          setRoomCategorySearchOpen(false);
+                        }}
+                      >
+                        使用"{roomCategorySearchQuery.trim()}"作为自定义类别
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {isHost && (
+              <div className="inline-row room-category-editor">
+                <input
+                  type="number"
+                  min={15}
+                  max={600}
+                  value={editableVoteDurationSeconds}
+                  onChange={(event) => setEditableVoteDurationSeconds(clamp(Number(event.target.value) || 15, 15, 600))}
+                  placeholder="投票时长（秒）"
+                />
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => roomLogic.updateVoteDuration(roomId, editableVoteDurationSeconds)}
+                  disabled={roomLogic.busy}
+                >
+                  保存投票时长
+                </button>
+              </div>
+            )}
+
+            {currentPlayer && (
+              <div className="word-card self-word-card">
+                <span className="tag">你的身份词</span>
+                {room.status === "lobby" ? (
+                  <strong>等待房主开局</strong>
+                ) : wordVisible ? (
+                  <strong>{currentPlayer.current_word ?? "暂未发词"}</strong>
+                ) : (
+                  <strong>点击按钮查看你的词</strong>
+                )}
+              </div>
+            )}
+
+            <div className="actions-row">
+              {room.status !== "lobby" && (
+                <button type="button" className="btn" onClick={() => setWordVisible((v) => !v)}>
+                  {wordVisible ? "隐藏我的词" : "显示我的词"}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={async () => {
+                  const success = await roomLogic.leaveRoom(roomId);
+                  if (success) {
+                    router.replace("/");
+                  }
+                }}
+              >
+                退出房间
+              </button>
+            </div>
+
+            {isHost && (
+              <div className="host-actions">
+                <h3>房主操作</h3>
+                <div className="actions-row">
+                  <button
+                    type="button"
+                    className="btn primary"
+                    onClick={() => roomLogic.startRound(roomId, room.category, room.undercover_count, categories)}
+                    disabled={roomLogic.busy || room.status === "voting"}
+                  >
+                    {room.round_number === 0 ? "开始本局（AI 生成 1 组词）" : "重开新局（重新生成 1 组词）"}
+                  </button>
+                  {room.vote_enabled && room.status === "playing" && (
+                    <button type="button" className="btn" onClick={() => roomLogic.openVoting(roomId)} disabled={roomLogic.busy}>
+                      {room.vote_candidate_ids && room.vote_candidate_ids.length > 0
+                        ? `开启第 ${room.vote_round} 轮加赛投票`
+                        : `开启第 ${room.vote_round} 轮投票`}
+                    </button>
+                  )}
+                  {room.vote_enabled && room.status === "voting" && (
+                    <button
+                      type="button"
+                      className="btn primary"
+                      onClick={() => roomLogic.publishVotingResult(roomId)}
+                      disabled={roomLogic.busy}
+                    >
+                      公布本轮投票结果
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </article>
+
+          <article className="panel">
+            <h2>玩家列表</h2>
+            <p className="hint">当前发言顺序（每局自动轮换）：</p>
+            <ul className="player-list">
+              {rotatedPlayers.map((player, index) => (
+                <li key={player.id} className={!player.is_alive ? "out" : ""}>
+                  <span className="player-main">
+                    第{index + 1}位 ·#{player.seat_no} {player.name} {player.session_id === sessionId ? "(你)" : ""}
+                  </span>
+                  <span className="player-side">
+                    <strong>{player.is_alive ? "存活" : "出局"}</strong>
+                    {isHost && player.session_id !== sessionId && (
+                      <button
+                        type="button"
+                        className="btn danger tiny"
+                        onClick={() => roomLogic.kickPlayer(roomId, player)}
+                        disabled={roomLogic.busy}
+                      >
+                        踢出
+                      </button>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+
+            {room.vote_enabled && room.status === "voting" && currentPlayer && (
+              <div className="vote-box">
+                <h3>本轮投票</h3>
+                <p className="hint">
+                  已投票人数：{votedCount}/{eligibleVoters.length}
+                  {remainingVoteSeconds != null ? ` · 剩余 ${remainingVoteSeconds} 秒` : ""}
+                </p>
+
+                {!currentPlayer.is_alive && <p className="hint">你已出局，当前只能查看投票进度。</p>}
+
+                {room.vote_candidate_ids && room.vote_candidate_ids.length > 0 && (
+                  <p className="hint">
+                    当前为平票加赛：候选人仅限
+                    {tieCandidatePlayers.length > 0
+                      ? ` ${tieCandidatePlayers.map((p) => `#${p.seat_no} ${p.name}`).join("、")}`
+                      : " 平票玩家"}
+                    ；仅其余存活玩家可投票。
+                  </p>
+                )}
+
+                {!canCurrentPlayerVote && room.vote_candidate_ids && room.vote_candidate_ids.length > 0 && (
+                  <p className="hint">你是平票候选人，本轮不能投票，请等待其他存活玩家投票。</p>
+                )}
+
+                {!canCurrentPlayerVote && !room.vote_candidate_ids && currentPlayer.is_alive && (
+                  <p className="hint">你当前轮次不可投票，请等待房主开启下一轮或结算。</p>
+                )}
+
+                <label>
+                  选择你怀疑的卧底
+                  <select value={voteTargetId} onChange={(event) => setVoteTargetId(event.target.value)} disabled={!canCurrentPlayerVote}>
+                    <option value="">请选择玩家</option>
+                    <option value="__ABSTAIN__">弃票（不投任何人）</option>
+                    {voteScopePlayers
+                      .filter((p) => p.id !== currentPlayer.id)
+                      .map((p) => (
+                        <option key={p.id} value={p.id}>
+                          玩家 {p.seat_no} · {p.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => roomLogic.castVote(roomId, voteTargetId, voteScopePlayers)}
+                  disabled={roomLogic.busy || !canCurrentPlayerVote}
+                >
+                  提交/更新我的投票
+                </button>
+              </div>
+            )}
+
+            {room.result_summary && <p className="hint room-summary">{room.result_summary}</p>}
+          </article>
+        </section>
+
+        <div className="notice-toast-stack">
+          {forcedExitNotice && (
+            <NoticeToast type="error" message={forcedExitNotice} onClose={() => setForcedExitNotice("")} />
+          )}
+          {showSyncToast && (
+            <NoticeToast
+              type="info"
+              message="同步中..."
+              onClose={() => {}}
+              autoDismiss={false}
+              showClose={false}
+            />
+          )}
+          {!forcedExitNotice && roomLogic.error && (
+            <NoticeToast type="error" message={roomLogic.error} onClose={() => roomLogic.setError("")} />
+          )}
+          {roomLogic.message && (
+            <NoticeToast type="success" message={roomLogic.message} onClose={() => roomLogic.setMessage("")} />
+          )}
+        </div>
+
+        {isGeneratingOverlayVisible && (
+          <div className="global-overlay" role="status" aria-live="polite" aria-label="AI生成中">
+            <div className="global-overlay-card">
+              <p className="overlay-title">AI 正在生成本局词条</p>
+              <p className="overlay-subtitle">请稍候，生成完成后会自动进入游戏。</p>
+            </div>
+          </div>
+        )}
+
+        <AlertDialog
+          open={roomLogic.confirmDialog.open}
+          onOpenChange={(open) => {
+            if (!open) roomLogic.resolveConfirmation(false);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{roomLogic.confirmDialog.title}</AlertDialogTitle>
+              <AlertDialogDescription>{roomLogic.confirmDialog.description}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel asChild>
+                <Button type="button" variant="outline" onClick={() => roomLogic.resolveConfirmation(false)}>
+                  {roomLogic.confirmDialog.cancelText}
+                </Button>
+              </AlertDialogCancel>
+              <AlertDialogAction asChild>
+                <Button
+                  type="button"
+                  variant={roomLogic.confirmDialog.tone === "danger" ? "danger" : "default"}
+                  onClick={() => roomLogic.resolveConfirmation(true)}
+                >
+                  {roomLogic.confirmDialog.confirmText}
+                </Button>
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </main>
+    </div>
+  );
+}

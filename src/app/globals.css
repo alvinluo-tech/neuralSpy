@@ -185,6 +185,22 @@ button:focus {
   font-size: 0.88rem;
 }
 
+.sync-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+}
+
+.sync-hint::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #2f8f63;
+  animation: sync-dot 900ms ease-in-out infinite;
+}
+
 .btn {
   border: none;
   border-radius: 999px;
@@ -368,6 +384,81 @@ button:focus {
   border-color: #bcdcc9;
 }
 
+.notice.info {
+  background: #eef6ff;
+  color: #1f4f83;
+  border-color: #c6daf4;
+}
+
+.notice-toast-stack {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(420px, calc(100vw - 24px));
+}
+
+.notice-toast {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  box-shadow: 0 14px 30px rgba(20, 24, 18, 0.2);
+}
+
+.notice-toast-text {
+  line-height: 1.4;
+}
+
+.notice-toast-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.75;
+}
+
+.notice-toast-close:hover {
+  opacity: 1;
+}
+
+.global-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(18, 24, 20, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.global-overlay-card {
+  width: min(420px, 100%);
+  border-radius: 16px;
+  border: 1px solid #d8e1dc;
+  background: #f9fbfa;
+  box-shadow: 0 22px 42px rgba(18, 24, 20, 0.28);
+  padding: 18px 16px;
+  text-align: center;
+}
+
+.overlay-title {
+  margin: 0;
+  font-weight: 700;
+  color: #1f2d26;
+}
+
+.overlay-subtitle {
+  margin: 8px 0 0;
+  color: #5f6b64;
+}
+
 .chip-list {
   margin: 10px 0 0;
   padding: 0;
@@ -499,6 +590,21 @@ button:focus {
   }
 }
 
+@keyframes sync-dot {
+  0% {
+    opacity: 0.3;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0.3;
+    transform: scale(0.85);
+  }
+}
+
 @media (max-width: 860px) {
   .panel-grid {
     grid-template-columns: 1fr;
@@ -528,5 +634,12 @@ button:focus {
   .entry-form-head {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .notice-toast-stack {
+    top: 10px;
+    right: 10px;
+    left: 10px;
+    width: auto;
   }
 }

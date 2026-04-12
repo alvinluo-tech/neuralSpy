@@ -227,6 +227,47 @@ select count(*) as subcategory_count from public.category_subcategories;
 - 幂等设计：并发调用只会有一个请求实际生效，其它请求返回 `noop`
 - 因此即使房主离线，时间到或全员投票后仍可自动结算
 
+## 埋点规范（Umami）
+
+为了避免动态路由统计碎片化（例如每个房间 ID 都变成一条页面路径），项目采用“手动上报 + 路径归一化”策略。
+
+### 页面上报
+
+- 统一使用 `useTrackPage`：`src/hooks/useTrackPage.ts`
+- 页面中只负责声明 canonical 页面路径，不直接操作 `window.umami`
+
+示例：
+
+```tsx
+useTrackPage("/room/play", "Room Play");
+```
+
+### 事件上报
+
+- 使用 `trackEvent`（`src/lib/umami.ts`）记录业务行为事件
+- 推荐用于：状态切换、结算结果、创建/加入房间等关键动作
+
+示例：
+
+```tsx
+trackEvent("room_status_change", {
+	roomId,
+	status: room.status,
+});
+```
+
+### 约定
+
+- 不在组件内重复上报 pageview（避免双计数）
+- 页面路由变更由页面级 Hook 处理，业务事件由逻辑层显式上报
+- 新增页面时，必须补充对应 `useTrackPage` 调用
+
+## 迭代记录规范
+
+- 重大改动请同步更新 `progress.md`
+- 每条记录至少包含：目标、重大改动、风险/注意点、验证、后续
+- 仅记录影响行为或架构的变更，不记录纯格式调整
+
 ## 部署到 Vercel
 
 1. 推送代码到 Git 仓库（GitHub/GitLab/Bitbucket）

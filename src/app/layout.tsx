@@ -30,6 +30,7 @@ export default function RootLayout({
           defer 
           src="https://cloud.umami.is/script.js" 
           data-website-id="f3bea32c-328c-4bf2-86f1-6d89fab43cd2"
+          data-auto-track="false"
         />
       </head>
       <body className="min-h-full flex flex-col">{children}</body>
