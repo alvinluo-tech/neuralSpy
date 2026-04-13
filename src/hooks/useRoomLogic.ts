@@ -625,9 +625,6 @@ export const useRoomLogic = (
         return false;
       }
 
-      setMessage(
-        isAbstainVote ? "你已选择弃票，系统已记录。重复投票会覆盖你上一票。" : "投票成功，已记录。重复投票会覆盖你上一票。"
-      );
       setBusy(false);
       await options?.refreshRoom?.();
       return true;

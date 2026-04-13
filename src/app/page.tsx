@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { supabase } from "@/lib/supabase";
 import { useCategorySearch } from "@/hooks/useCategorySearch";
 import { useTrackPage } from "@/hooks/useTrackPage";
@@ -558,15 +559,6 @@ export default function HomePage() {
                   onChange={(event) => setCreateUndercoverCount(clamp(Number(event.target.value) || 1, 1, 3))}
                 />
               </label>
-              <label>
-                每轮投票限时（秒）
-                <input
-                  type="number"
-                  min={0}
-                  value={createVoteDurationSeconds}
-                  onChange={(event) => setCreateVoteDurationSeconds(normalizeVoteDurationSeconds(Number(event.target.value)))}
-                />
-              </label>
               <label className="check-line">
                 <input
                   type="checkbox"
@@ -575,7 +567,31 @@ export default function HomePage() {
                 />
                 启用投票功能
               </label>
-              <button type="button" className="btn primary" onClick={createRoom} disabled={busy}>
+              <AnimatePresence initial={false}>
+                {createVoteEnabled && (
+                  <motion.div
+                    key="vote-duration-field"
+                    initial={{ opacity: 0, y: -8, height: 0 }}
+                    animate={{ opacity: 1, y: 0, height: "auto" }}
+                    exit={{ opacity: 0, y: -8, height: 0 }}
+                    transition={{ duration: 0.2, ease: "easeOut" }}
+                    style={{ overflow: "hidden" }}
+                  >
+                    <label>
+                      每轮投票限时（秒）
+                      <input
+                        type="number"
+                        min={0}
+                        value={createVoteDurationSeconds}
+                        onChange={(event) =>
+                          setCreateVoteDurationSeconds(normalizeVoteDurationSeconds(Number(event.target.value)))
+                        }
+                      />
+                    </label>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              <button type="button" className={`btn primary${busy ? " loading" : ""}`} onClick={createRoom} disabled={busy}>
                 {busy ? "处理中..." : "创建房间"}
               </button>
             </article>
@@ -633,7 +649,7 @@ export default function HomePage() {
                 <p className="hint">请输入 6 位邀请码（字母或数字）。</p>
               </label>
 
-              <button type="button" className="btn primary" onClick={joinRoom} disabled={busy}>
+              <button type="button" className={`btn primary${busy ? " loading" : ""}`} onClick={joinRoom} disabled={busy}>
                 {busy ? "处理中..." : "加入房间"}
               </button>
             </section>

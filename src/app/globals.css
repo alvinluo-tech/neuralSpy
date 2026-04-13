@@ -295,12 +295,31 @@ button:focus {
   background: #ebece6;
   color: #222;
   transition:
-    transform 120ms ease,
-    background 160ms ease;
+    transform 150ms ease,
+    background 160ms ease,
+    opacity 150ms ease,
+    box-shadow 180ms ease;
 }
 
 .btn:hover {
   transform: translateY(-1px);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.95);
+  opacity: 0.88;
+}
+
+.btn.loading {
+  transform: scale(0.95);
+  opacity: 0.88;
+  pointer-events: none;
+}
+
+.btn.saved {
+  background: #e7f4eb;
+  border: 1px solid #bad8c1;
+  color: #1f6940;
 }
 
 .btn:disabled {

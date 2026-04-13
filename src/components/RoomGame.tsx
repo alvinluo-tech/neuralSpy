@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,7 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { NoticeToast } from "@/components/ui/notice-toast";
 import { useRoomData } from "@/hooks/useRoomData";
-import { AI_GENERATING_SUMMARY, useRoomLogic } from "@/hooks/useRoomLogic";
+import { ABSTAIN_VOTE_VALUE, AI_GENERATING_SUMMARY, useRoomLogic } from "@/hooks/useRoomLogic";
 import { useCategorySearch } from "@/hooks/useCategorySearch";
 import {
   isWhiteboardRole,
@@ -90,6 +91,8 @@ type RoomGameProps = {
   pageType: "lobby" | "play" | "result";
 };
 
+type SaveState = "idle" | "saving" | "saved";
+
 type GroqModelProfile = {
   priority: "P0" | "P1" | "P2" | "P3" | "P4";
   value: string;
@@ -151,6 +154,9 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   const [roomCategorySearchOpen, setRoomCategorySearchOpen] = useState(false);
   const [selectedAiModel, setSelectedAiModel] = useState(AUTO_MODEL_VALUE);
   const [showSyncToast, setShowSyncToast] = useState(false);
+  const [voteSubmitToast, setVoteSubmitToast] = useState("");
+  const [categorySaveState, setCategorySaveState] = useState<SaveState>("idle");
+  const [voteDurationSaveState, setVoteDurationSaveState] = useState<SaveState>("idle");
   const [whiteboardCountDraft, setWhiteboardCountDraft] = useState(() => {
     if (typeof window === "undefined") return 1;
     const raw = safeGetLocalValue(`${WHITEBOARD_COUNT_STORAGE_PREFIX}${roomId}`);
@@ -302,6 +308,8 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   }, []);
 
   const autoPublishingRef = useRef(false);
+  const categorySaveResetTimerRef = useRef<number | null>(null);
+  const voteDurationSaveResetTimerRef = useRef<number | null>(null);
   const gameResultTrackedKeyRef = useRef<string | null>(null);
   const syncToastShownAtRef = useRef<number | null>(null);
   const syncToastDelayTimerRef = useRef<number | null>(null);
@@ -389,6 +397,17 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
       }
       if (syncToastHideTimerRef.current != null) {
         window.clearTimeout(syncToastHideTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (categorySaveResetTimerRef.current != null) {
+        window.clearTimeout(categorySaveResetTimerRef.current);
+      }
+      if (voteDurationSaveResetTimerRef.current != null) {
+        window.clearTimeout(voteDurationSaveResetTimerRef.current);
       }
     };
   }, []);
@@ -484,21 +503,33 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   />
                   <button
                     type="button"
-                    className="btn ghost"
+                    className={`btn ghost${categorySaveState === "saving" ? " loading" : ""}${categorySaveState === "saved" ? " saved" : ""}`}
                     onClick={async () => {
                       if (!trimmedCategoryDraft) {
                         roomLogic.setError("类别不能为空。");
                         return;
                       }
+
+                      setCategorySaveState("saving");
                       const ok = await roomLogic.updateRoomCategory(roomId, trimmedCategoryDraft);
                       if (ok) {
                         setRoomCategoryDraftValue(null);
                         setRoomCategorySearchOpen(false);
+                        setCategorySaveState("saved");
+                        if (categorySaveResetTimerRef.current != null) {
+                          window.clearTimeout(categorySaveResetTimerRef.current);
+                        }
+                        categorySaveResetTimerRef.current = window.setTimeout(() => {
+                          setCategorySaveState("idle");
+                          categorySaveResetTimerRef.current = null;
+                        }, 1200);
+                      } else {
+                        setCategorySaveState("idle");
                       }
                     }}
-                    disabled={roomLogic.busy || !categoryDirty || !trimmedCategoryDraft}
+                    disabled={roomLogic.busy || categorySaveState === "saving" || !categoryDirty || !trimmedCategoryDraft}
                   >
-                    保存类别
+                    {categorySaveState === "saving" ? "保存中..." : categorySaveState === "saved" ? "已保存" : "保存类别"}
                   </button>
                 </div>
 
@@ -623,20 +654,32 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                 />
                 <button
                   type="button"
-                  className="btn ghost"
+                  className={`btn ghost${voteDurationSaveState === "saving" ? " loading" : ""}${voteDurationSaveState === "saved" ? " saved" : ""}`}
                   onClick={async () => {
                     if (voteDurationDraft == null) {
                       roomLogic.setError("请输入大于等于 0 秒的投票时长。");
                       return;
                     }
+
+                    setVoteDurationSaveState("saving");
                     const ok = await roomLogic.updateVoteDuration(roomId, voteDurationDraft);
                     if (ok) {
                       setVoteDurationDraftInputValue(null);
+                      setVoteDurationSaveState("saved");
+                      if (voteDurationSaveResetTimerRef.current != null) {
+                        window.clearTimeout(voteDurationSaveResetTimerRef.current);
+                      }
+                      voteDurationSaveResetTimerRef.current = window.setTimeout(() => {
+                        setVoteDurationSaveState("idle");
+                        voteDurationSaveResetTimerRef.current = null;
+                      }, 1200);
+                    } else {
+                      setVoteDurationSaveState("idle");
                     }
                   }}
-                  disabled={roomLogic.busy || !voteDurationDirty || voteDurationDraft == null}
+                  disabled={roomLogic.busy || voteDurationSaveState === "saving" || !voteDurationDirty || voteDurationDraft == null}
                 >
-                  保存投票时长
+                  {voteDurationSaveState === "saving" ? "保存中..." : voteDurationSaveState === "saved" ? "已保存" : "保存投票时长"}
                 </button>
               </div>
             )}
@@ -707,7 +750,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                 <div className="actions-row">
                   <button
                     type="button"
-                    className="btn primary"
+                    className={`btn primary${roomLogic.busy ? " loading" : ""}`}
                     onClick={() =>
                       roomLogic.startRound(roomId, room.category, room.undercover_count, effectiveWhiteboardCount, categories, {
                         provider: "groq",
@@ -716,23 +759,34 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                     }
                     disabled={roomLogic.busy || room.status === "voting"}
                   >
-                    {room.round_number === 0 ? "开始本局（AI 生成 1 组词）" : "重开新局（重新生成 1 组词）"}
+                    {roomLogic.busy
+                      ? "处理中..."
+                      : room.round_number === 0
+                        ? "开始本局（AI 生成 1 组词）"
+                        : "重开新局（重新生成 1 组词）"}
                   </button>
                   {room.vote_enabled && room.status === "playing" && (
-                    <button type="button" className="btn" onClick={() => roomLogic.openVoting(roomId)} disabled={roomLogic.busy}>
-                      {room.vote_candidate_ids && room.vote_candidate_ids.length > 0
-                        ? `开启第 ${room.vote_round} 轮加赛投票`
-                        : `开启第 ${room.vote_round} 轮投票`}
+                    <button
+                      type="button"
+                      className={`btn${roomLogic.busy ? " loading" : ""}`}
+                      onClick={() => roomLogic.openVoting(roomId)}
+                      disabled={roomLogic.busy}
+                    >
+                      {roomLogic.busy
+                        ? "处理中..."
+                        : room.vote_candidate_ids && room.vote_candidate_ids.length > 0
+                          ? `开启第 ${room.vote_round} 轮加赛投票`
+                          : `开启第 ${room.vote_round} 轮投票`}
                     </button>
                   )}
                   {room.vote_enabled && room.status === "voting" && (
                     <button
                       type="button"
-                      className="btn primary"
+                      className={`btn primary${roomLogic.busy ? " loading" : ""}`}
                       onClick={() => roomLogic.publishVotingResult(roomId)}
                       disabled={roomLogic.busy}
                     >
-                      公布本轮投票结果
+                      {roomLogic.busy ? "处理中..." : "公布本轮投票结果"}
                     </button>
                   )}
                 </div>
@@ -743,28 +797,48 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
           <article className="panel">
             <h2>玩家列表</h2>
             <p className="hint">当前发言顺序（每局自动轮换）：</p>
-            <ul className="player-list">
-              {rotatedPlayers.map((player, index) => (
-                <li key={player.id} className={!player.is_alive ? "out" : ""}>
-                  <span className="player-main">
-                    第{index + 1}位 ·#{player.seat_no} {player.name} {player.session_id === sessionId ? "(你)" : ""}
-                  </span>
-                  <span className="player-side">
-                    <strong>{player.is_alive ? "存活" : "出局"}</strong>
-                    {isHost && player.session_id !== sessionId && (
-                      <button
-                        type="button"
-                        className="btn danger tiny"
-                        onClick={() => roomLogic.kickPlayer(roomId, player)}
-                        disabled={roomLogic.busy}
-                      >
-                        踢出
-                      </button>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <motion.ul className="player-list" layout>
+              <AnimatePresence initial={false}>
+                {rotatedPlayers.map((player, index) => (
+                  <motion.li
+                    key={player.id}
+                    layout
+                    layoutId={`player-${player.id}`}
+                    className={!player.is_alive ? "out" : ""}
+                    initial={{ opacity: 0, x: -14, scale: 0.985 }}
+                    animate={{
+                      opacity: 1,
+                      x: 0,
+                      scale: 1,
+                      transition: { duration: 0.2, ease: "easeOut" },
+                    }}
+                    exit={{
+                      opacity: 0,
+                      x: 12,
+                      scale: 0.985,
+                      transition: { duration: 0.16, ease: "easeIn" },
+                    }}
+                  >
+                    <span className="player-main">
+                      第{index + 1}位 ·#{player.seat_no} {player.name} {player.session_id === sessionId ? "(你)" : ""}
+                    </span>
+                    <span className="player-side">
+                      <strong>{player.is_alive ? "存活" : "出局"}</strong>
+                      {isHost && player.session_id !== sessionId && (
+                        <button
+                          type="button"
+                          className={`btn danger tiny${roomLogic.busy ? " loading" : ""}`}
+                          onClick={() => roomLogic.kickPlayer(roomId, player)}
+                          disabled={roomLogic.busy}
+                        >
+                          踢出
+                        </button>
+                      )}
+                    </span>
+                  </motion.li>
+                ))}
+              </AnimatePresence>
+            </motion.ul>
 
             {room.vote_enabled && room.status === "voting" && currentPlayer && (
               <div className="vote-box">
@@ -810,11 +884,16 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                 </label>
                 <button
                   type="button"
-                  className="btn primary"
-                  onClick={() => roomLogic.castVote(roomId, voteTargetId, voteScopePlayers)}
+                  className={`btn primary${roomLogic.busy ? " loading" : ""}`}
+                  onClick={async () => {
+                    const ok = await roomLogic.castVote(roomId, voteTargetId, voteScopePlayers);
+                    if (ok) {
+                      setVoteSubmitToast(voteTargetId === ABSTAIN_VOTE_VALUE ? "弃票已提交" : "投票已提交");
+                    }
+                  }}
                   disabled={roomLogic.busy || !canCurrentPlayerVote}
                 >
-                  提交/更新我的投票
+                  {roomLogic.busy ? "提交中..." : "提交/更新我的投票"}
                 </button>
               </div>
             )}
@@ -837,11 +916,11 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               <div className="actions-row">
                 <button
                   type="button"
-                  className="btn primary"
+                  className={`btn primary${roomLogic.busy ? " loading" : ""}`}
                   disabled={roomLogic.busy || !whiteboardGuess.trim()}
                   onClick={() => roomLogic.submitWhiteboardGuess(roomId, whiteboardGuess, "grok")}
                 >
-                  提交猜词
+                  {roomLogic.busy ? "提交中..." : "提交猜词"}
                 </button>
               </div>
             </div>
@@ -851,6 +930,14 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
         <div className="notice-toast-stack">
           {forcedExitNotice && (
             <NoticeToast type="error" message={forcedExitNotice} onClose={() => {}} />
+          )}
+          {voteSubmitToast && (
+            <NoticeToast
+              type="success"
+              message={voteSubmitToast}
+              durationMs={1400}
+              onClose={() => setVoteSubmitToast("")}
+            />
           )}
           {showSyncToast && (
             <NoticeToast
