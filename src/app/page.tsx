@@ -54,6 +54,12 @@ const safeSetSessionValue = (key: string, value: string) => {
 
 type EntryMode = "create" | "join";
 
+const HOME_FLOW_STEPS = [
+  { label: "选择方式", step: 1 },
+  { label: "填写信息", step: 2 },
+  { label: "进入房间", step: 3 },
+] as const;
+
 export default function HomePage() {
   const router = useRouter();
   const joinCodeInputRefs = useRef<Array<HTMLInputElement | null>>([]);
@@ -81,6 +87,46 @@ export default function HomePage() {
     [buildCategorySuggestions, categorySearchQuery],
   );
   const joinCode = joinCodeSlots.join("");
+  const trimmedNickname = nickname.trim();
+  const isCreateReady =
+    trimmedNickname.length > 0 &&
+    createCategory.trim().length > 0 &&
+    (!createVoteEnabled || normalizeVoteDurationSeconds(createVoteDurationSeconds) >= 0);
+  const isJoinReady = trimmedNickname.length > 0 && joinCode.length === INVITE_CODE_LENGTH;
+
+  let flowModeLabel = "未选择";
+  let flowCompletedStep = 0;
+  let flowCurrentStep = 1;
+  let flowNextAction = "请选择“创建”或“加入”开始。";
+
+  if (entryMode === "create") {
+    flowModeLabel = "创建模式";
+    flowCompletedStep = 1;
+    flowCurrentStep = 2;
+    flowNextAction = "填写昵称与规则后，点击“创建房间”。";
+
+    if (isCreateReady) {
+      flowCompletedStep = 2;
+      flowCurrentStep = 3;
+      flowNextAction = "信息已就绪，点击“创建房间”进入大厅。";
+    }
+  } else if (entryMode === "join") {
+    flowModeLabel = "加入模式";
+    flowCompletedStep = 1;
+    flowCurrentStep = 2;
+    flowNextAction = "填写昵称和 6 位邀请码后点击“加入房间”。";
+
+    if (isJoinReady) {
+      flowCompletedStep = 2;
+      flowCurrentStep = 3;
+      flowNextAction = "信息已就绪，点击“加入房间”进入大厅。";
+    }
+  }
+
+  if (busy) {
+    flowCurrentStep = 3;
+    flowNextAction = "正在处理，请稍候...";
+  }
 
   const focusJoinCodeInput = (index: number) => {
     const target = joinCodeInputRefs.current[index];
@@ -384,22 +430,48 @@ export default function HomePage() {
           </p>
         </section>
 
+        <section className="panel home-flow-panel">
+          <div className="home-flow-head">
+            <h2>开局流程</h2>
+            <span className="status-pill">当前模式：{flowModeLabel}</span>
+          </div>
+          <div className="home-flow-steps" aria-label="大厅流程步骤预览">
+            {HOME_FLOW_STEPS.map((item, index) => {
+              const state =
+                item.step <= flowCompletedStep ? "done" : flowCurrentStep === item.step ? "current" : "todo";
+
+              return (
+                <div className="home-flow-item" key={item.step}>
+                  <span className={`home-flow-dot ${state}`}>{item.step <= flowCompletedStep ? "OK" : item.step}</span>
+                  <span className={`home-flow-label ${state}`}>{item.label}</span>
+                  {index < HOME_FLOW_STEPS.length - 1 && <span className="home-flow-arrow">→</span>}
+                </div>
+              );
+            })}
+          </div>
+          <p className="hint">下一步：{flowNextAction}</p>
+        </section>
+
         {entryMode === null && (
-          <section className="panel-grid entry-choice-grid">
-            <article className="panel entry-option-card">
+          <section className="entry-cta-stack">
+            <article className="panel entry-option-card entry-option-primary">
               <h2>创建新房间</h2>
               <p className="hint">成为房主并设置类别、卧底人数和投票规则。</p>
-              <button type="button" className="btn primary" onClick={() => setEntryMode("create")}>
+              <button type="button" className="btn primary major" onClick={() => setEntryMode("create")}>
                 我来创建
               </button>
             </article>
 
-            <article className="panel entry-option-card">
+            <div className="entry-cta-divider" aria-hidden="true">
+              <span>或者</span>
+            </div>
+
+            <article className="panel entry-option-card entry-option-secondary">
               <h2>加入已有房间</h2>
               <p className="hint">输入邀请码，快速加入朋友已经创建的房间。</p>
               <button
                 type="button"
-                className="btn"
+                className="btn ghost minor"
                 onClick={() => {
                   resetJoinCodeSlots();
                   setEntryMode("join");

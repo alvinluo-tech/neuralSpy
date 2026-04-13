@@ -142,6 +142,97 @@ const GROQ_MODEL_PROFILES: GroqModelProfile[] = [
 const DEFAULT_GROQ_MODEL = GROQ_MODEL_PROFILES[0].value;
 const AUTO_MODEL_VALUE = "__AUTO_RECOMMENDED_MODEL__";
 
+const LOBBY_STEPS = ["设置规则", "等待玩家", "开始游戏"] as const;
+
+const resolveLobbyStep = (playerCount: number) => {
+  if (playerCount >= 3) return 3;
+  if (playerCount >= 2) return 2;
+  return 1;
+};
+
+function LobbySteps({ currentStep }: { currentStep: number }) {
+  return (
+    <div className="lobby-steps" aria-label="大厅流程步骤">
+      {LOBBY_STEPS.map((label, index) => {
+        const step = index + 1;
+        const state = currentStep > step ? "done" : currentStep === step ? "current" : "todo";
+
+        return (
+          <div key={label} className="lobby-step-block">
+            <div className={`lobby-step-dot ${state}`}>{currentStep > step ? "OK" : step}</div>
+            <span className={`lobby-step-label ${state}`}>{label}</span>
+            {index < LOBBY_STEPS.length - 1 && <span className="lobby-step-line" aria-hidden="true" />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function GameProgressCard({
+  currentRound,
+  remainingPlayers,
+  totalPlayers,
+}: {
+  currentRound: number;
+  remainingPlayers: number;
+  totalPlayers: number;
+}) {
+  const totalRounds = Math.max(5, currentRound);
+  const progress = Math.min(100, (currentRound / totalRounds) * 100);
+
+  return (
+    <div className="game-progress-card">
+      <div className="game-progress-head">
+        <div>
+          <p className="hint">当前轮次</p>
+          <p className="game-progress-value">第 {currentRound} 轮</p>
+        </div>
+        <div className="game-progress-right">
+          <p className="hint">存活玩家</p>
+          <p className="game-progress-value">
+            {remainingPlayers}/{totalPlayers}
+          </p>
+        </div>
+      </div>
+      <div className="game-progress-track" aria-hidden="true">
+        <div className="game-progress-fill" style={{ width: `${progress}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function VoteCountdownRing({ remainingSeconds, totalSeconds }: { remainingSeconds: number; totalSeconds: number }) {
+  const safeTotal = Math.max(1, totalSeconds);
+  const clampedRemaining = Math.max(0, Math.min(remainingSeconds, safeTotal));
+  const percentage = (clampedRemaining / safeTotal) * 100;
+  const radius = 44;
+  const circumference = 2 * Math.PI * radius;
+  const isUrgent = clampedRemaining <= 10;
+
+  return (
+    <div className="vote-countdown" role="timer" aria-live="polite" aria-label={`剩余 ${clampedRemaining} 秒`}>
+      <svg viewBox="0 0 100 100" className="vote-countdown-svg" aria-hidden="true">
+        <circle cx="50" cy="50" r={radius} className="vote-countdown-bg" />
+        <circle
+          cx="50"
+          cy="50"
+          r={radius}
+          className={`vote-countdown-fg${isUrgent ? " urgent" : ""}`}
+          style={{
+            strokeDasharray: circumference,
+            strokeDashoffset: circumference * (1 - percentage / 100),
+          }}
+        />
+      </svg>
+      <div className="vote-countdown-text">
+        <strong>{clampedRemaining}</strong>
+        <span>秒</span>
+      </div>
+    </div>
+  );
+}
+
 export function RoomGame({ roomId, pageType }: RoomGameProps) {
   const router = useRouter();
 
@@ -155,8 +246,12 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   const [selectedAiModel, setSelectedAiModel] = useState(AUTO_MODEL_VALUE);
   const [showSyncToast, setShowSyncToast] = useState(false);
   const [voteSubmitToast, setVoteSubmitToast] = useState("");
+  const [presenceJoinToast, setPresenceJoinToast] = useState("");
+  const [presenceLeaveToast, setPresenceLeaveToast] = useState("");
   const [categorySaveState, setCategorySaveState] = useState<SaveState>("idle");
+  const [undercoverSaveState, setUndercoverSaveState] = useState<SaveState>("idle");
   const [voteDurationSaveState, setVoteDurationSaveState] = useState<SaveState>("idle");
+  const [undercoverCountDraftInputValue, setUndercoverCountDraftInputValue] = useState<string | null>(null);
   const [whiteboardCountDraft, setWhiteboardCountDraft] = useState(() => {
     if (typeof window === "undefined") return 1;
     const raw = safeGetLocalValue(`${WHITEBOARD_COUNT_STORAGE_PREFIX}${roomId}`);
@@ -222,16 +317,21 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   }, [room, pageType, roomId, router]);
 
   const forcedExitTimerRef = useRef<number | null>(null);
+  const playerSnapshotReadyRef = useRef(false);
+  const prevPlayersRef = useRef<Map<string, { seat_no: number; name: string; session_id: string }>>(new Map());
+  const suppressedLeavePlayerIdsRef = useRef<Set<string>>(new Set());
   const currentPlayer = players.find((player) => player.session_id === sessionId) ?? null;
   const isHost = room?.host_session_id === sessionId;
+  const canEditRoomConfig = isHost;
   const alivePlayers = players.filter((player) => player.is_alive);
   const voteCandidateIds = room?.vote_candidate_ids ?? [];
+  const restrictedTieBreak = voteCandidateIds.length > 0 && voteCandidateIds.length < alivePlayers.length;
   const voteScopePlayers =
     voteCandidateIds.length === 0
       ? alivePlayers
       : alivePlayers.filter((player) => voteCandidateIds.includes(player.id));
   const eligibleVoters =
-    voteCandidateIds.length === 0
+    voteCandidateIds.length === 0 || !restrictedTieBreak
       ? alivePlayers
       : alivePlayers.filter((player) => !voteCandidateIds.includes(player.id));
   const voteDeadlineMs = !room?.vote_deadline_at ? null : Date.parse(room.vote_deadline_at);
@@ -239,11 +339,15 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
     voteDeadlineMs == null || Number.isNaN(voteDeadlineMs) ? null : voteDeadlineMs;
   const remainingVoteSeconds =
     normalizedVoteDeadlineMs == null ? null : Math.max(0, Math.ceil((normalizedVoteDeadlineMs - nowMs) / 1000));
+  const currentRoundVotes = votes.filter(
+    (vote) => vote.round_number === room?.round_number && vote.vote_round === room?.vote_round,
+  );
   const votedCount = new Set(
-    votes
+    currentRoundVotes
       .filter((vote) => eligibleVoters.some((player) => player.id === vote.voter_player_id))
       .map((vote) => vote.voter_player_id)
   ).size;
+  const votedPlayerIds = new Set(currentRoundVotes.map((vote) => vote.voter_player_id));
   const canCurrentPlayerVote = !!currentPlayer?.is_alive && eligibleVoters.some((player) => player.id === currentPlayer.id);
   const tieCandidatePlayers =
     voteCandidateIds.length === 0
@@ -258,6 +362,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
           return [...sorted.slice(rotation), ...sorted.slice(0, rotation)];
         })();
   const currentRoomCategory = room?.category ?? "";
+  const currentUndercoverCount = room?.undercover_count ?? 1;
   const currentVoteDuration = room?.vote_duration_seconds ?? 60;
   const whiteboardDisabledByThreePlayerMode = players.length === 3;
   const effectiveWhiteboardCount = whiteboardDisabledByThreePlayerMode ? 0 : whiteboardCountDraft;
@@ -270,9 +375,23 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
     currentPlayer.id === room?.last_eliminated_player_id &&
     (room?.result_summary ?? "").includes(WHITEBOARD_GUESS_PENDING_MARKER);
   const displayRoomSummary = sanitizeRoomSummary(room?.result_summary);
+  const lobbyCurrentStep = resolveLobbyStep(players.length);
+  const showGameProgress = room?.status === "playing" || room?.status === "voting";
   const roomCategoryInputValue = roomCategoryDraftValue ?? currentRoomCategory;
   const trimmedCategoryDraft = roomCategoryInputValue.trim();
   const categoryDirty = trimmedCategoryDraft !== currentRoomCategory.trim();
+  const undercoverCountInputValue = undercoverCountDraftInputValue ?? String(currentUndercoverCount);
+  const parsedUndercoverCount = Number(undercoverCountInputValue);
+  const undercoverCountDraft =
+    undercoverCountInputValue.trim().length > 0 &&
+    Number.isFinite(parsedUndercoverCount) &&
+    parsedUndercoverCount >= 1 &&
+    parsedUndercoverCount <= 3
+      ? Math.trunc(parsedUndercoverCount)
+      : null;
+  const undercoverCountDirty =
+    undercoverCountDraftInputValue !== null &&
+    (undercoverCountDraft == null || undercoverCountDraft !== currentUndercoverCount);
   const voteDurationInputValue = voteDurationDraftInputValue ?? String(currentVoteDuration);
   const parsedVoteDuration = Number(voteDurationInputValue);
   const voteDurationDraft =
@@ -300,6 +419,60 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   }, [forcedExitNotice, roomId, sessionId, router]);
 
   useEffect(() => {
+    playerSnapshotReadyRef.current = false;
+    prevPlayersRef.current = new Map();
+    suppressedLeavePlayerIdsRef.current.clear();
+  }, [roomId]);
+
+  useEffect(() => {
+    if (roomLoading || !room) return;
+
+    const currentMap = new Map(
+      players.map((player) => [
+        player.id,
+        { seat_no: player.seat_no, name: player.name, session_id: player.session_id },
+      ])
+    );
+
+    if (!playerSnapshotReadyRef.current) {
+      prevPlayersRef.current = currentMap;
+      playerSnapshotReadyRef.current = true;
+      return;
+    }
+
+    const prevMap = prevPlayersRef.current;
+    const joined = players
+      .filter((player) => !prevMap.has(player.id) && player.session_id !== sessionId)
+      .map((player) => `玩家${player.seat_no}（${player.name}）`);
+    const leftEntries = Array.from(prevMap.entries()).filter(
+      ([id, player]) => !currentMap.has(id) && player.session_id !== sessionId,
+    );
+    const left = leftEntries
+      .filter(([id]) => !suppressedLeavePlayerIdsRef.current.has(id))
+      .map(([, player]) => `玩家${player.seat_no}（${player.name}）`);
+
+    for (const [id] of leftEntries) {
+      suppressedLeavePlayerIdsRef.current.delete(id);
+    }
+
+    if (joined.length > 0) {
+      const nextMessage = `${joined.join("、")}加入了房间`;
+      window.setTimeout(() => {
+        setPresenceJoinToast(nextMessage);
+      }, 0);
+    }
+
+    if (left.length > 0) {
+      const nextMessage = `${left.join("、")}离开了房间`;
+      window.setTimeout(() => {
+        setPresenceLeaveToast(nextMessage);
+      }, 0);
+    }
+
+    prevPlayersRef.current = currentMap;
+  }, [players, roomLoading, room, sessionId]);
+
+  useEffect(() => {
     return () => {
       if (forcedExitTimerRef.current != null) {
         window.clearTimeout(forcedExitTimerRef.current);
@@ -308,7 +481,9 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   }, []);
 
   const autoPublishingRef = useRef(false);
+  const autoSettleVoteKeyRef = useRef<string | null>(null);
   const categorySaveResetTimerRef = useRef<number | null>(null);
+  const undercoverSaveResetTimerRef = useRef<number | null>(null);
   const voteDurationSaveResetTimerRef = useRef<number | null>(null);
   const gameResultTrackedKeyRef = useRef<string | null>(null);
   const syncToastShownAtRef = useRef<number | null>(null);
@@ -406,6 +581,9 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
       if (categorySaveResetTimerRef.current != null) {
         window.clearTimeout(categorySaveResetTimerRef.current);
       }
+      if (undercoverSaveResetTimerRef.current != null) {
+        window.clearTimeout(undercoverSaveResetTimerRef.current);
+      }
       if (voteDurationSaveResetTimerRef.current != null) {
         window.clearTimeout(voteDurationSaveResetTimerRef.current);
       }
@@ -413,7 +591,10 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   }, []);
 
   useEffect(() => {
-    if (!room || room.status !== "voting" || autoPublishingRef.current) return;
+    if (!room || room.status !== "voting" || autoPublishingRef.current || !isHost) return;
+
+    const voteKey = `${room.round_number}:${room.vote_round}`;
+    if (autoSettleVoteKeyRef.current === voteKey) return;
 
     const voterCount = eligibleVoters.length;
     const allVoted = voterCount > 0 && votedCount >= voterCount;
@@ -422,10 +603,22 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
     if (!allVoted && !deadlineReached) return;
 
     autoPublishingRef.current = true;
-    void roomLogic.publishVotingResult(roomId).finally(() => {
-      autoPublishingRef.current = false;
-    });
-  }, [room, eligibleVoters.length, votedCount, voteDeadlineMs, nowMs, roomLogic, roomId]);
+    void roomLogic
+      .publishVotingResult(roomId, { silentNoop: true })
+      .then((outcome) => {
+        // Keep retrying on timing-boundary noop; lock only when server actually processed this round.
+        autoSettleVoteKeyRef.current = outcome.action === "noop" ? null : voteKey;
+      })
+      .finally(() => {
+        autoPublishingRef.current = false;
+      });
+  }, [room, eligibleVoters.length, votedCount, voteDeadlineMs, nowMs, roomLogic, roomId, isHost]);
+
+  useEffect(() => {
+    if (room?.status !== "voting") {
+      autoSettleVoteKeyRef.current = null;
+    }
+  }, [room?.status, room?.round_number, room?.vote_round]);
 
   if (!sessionId || roomLoading) {
     return (
@@ -467,6 +660,25 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
           </p>
         </section>
 
+        {room.status === "lobby" && (
+          <section className="panel lobby-steps-panel">
+            <LobbySteps currentStep={lobbyCurrentStep} />
+            <p className="hint">
+              当前 {players.length} 人在房间，至少 3 人才能开局。
+            </p>
+          </section>
+        )}
+
+        {showGameProgress && (
+          <section className="panel game-progress-panel">
+            <GameProgressCard
+              currentRound={Math.max(room.round_number, 1)}
+              remainingPlayers={alivePlayers.length}
+              totalPlayers={players.length}
+            />
+          </section>
+        )}
+
         <section className="panel-grid room-grid">
           <article className="panel">
             <h2>房间信息</h2>
@@ -482,7 +694,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
             <p className="hint">投票功能：{room.vote_enabled ? "开启" : "关闭"}</p>
             <p className="hint">每轮限时：{room.vote_duration_seconds ?? 60} 秒</p>
 
-            {isHost && (
+            {canEditRoomConfig && (
               <div
                 className="room-category-editor"
                 style={{ position: "relative" }}
@@ -615,7 +827,52 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               </div>
             )}
 
-            {isHost && (
+            {canEditRoomConfig && (
+              <div className="inline-row room-category-editor">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={undercoverCountInputValue}
+                  onChange={(event) => {
+                    const nextValue = event.target.value.replace(/[^\d]/g, "");
+                    setUndercoverCountDraftInputValue(nextValue);
+                  }}
+                  placeholder="卧底人数（1-3）"
+                />
+                <button
+                  type="button"
+                  className={`btn ghost${undercoverSaveState === "saving" ? " loading" : ""}${undercoverSaveState === "saved" ? " saved" : ""}`}
+                  onClick={async () => {
+                    if (undercoverCountDraft == null) {
+                      roomLogic.setError("请输入 1 到 3 的卧底人数。");
+                      return;
+                    }
+
+                    setUndercoverSaveState("saving");
+                    const ok = await roomLogic.updateUndercoverCount(roomId, undercoverCountDraft);
+                    if (ok) {
+                      setUndercoverCountDraftInputValue(null);
+                      setUndercoverSaveState("saved");
+                      if (undercoverSaveResetTimerRef.current != null) {
+                        window.clearTimeout(undercoverSaveResetTimerRef.current);
+                      }
+                      undercoverSaveResetTimerRef.current = window.setTimeout(() => {
+                        setUndercoverSaveState("idle");
+                        undercoverSaveResetTimerRef.current = null;
+                      }, 1200);
+                    } else {
+                      setUndercoverSaveState("idle");
+                    }
+                  }}
+                  disabled={roomLogic.busy || undercoverSaveState === "saving" || !undercoverCountDirty || undercoverCountDraft == null}
+                >
+                  {undercoverSaveState === "saving" ? "保存中..." : undercoverSaveState === "saved" ? "已保存" : "保存卧底人数"}
+                </button>
+              </div>
+            )}
+
+            {canEditRoomConfig && (
               <div className="inline-row room-category-editor">
                 <label style={{ flex: 1 }}>
                   白板人数（0-2）
@@ -635,11 +892,11 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               </div>
             )}
 
-            {whiteboardDisabledByThreePlayerMode && (
+            {canEditRoomConfig && whiteboardDisabledByThreePlayerMode && (
               <p className="hint">3 人局暂不支持白板，已自动禁用。</p>
             )}
 
-            {isHost && (
+            {canEditRoomConfig && (
               <div className="inline-row room-category-editor">
                 <input
                   type="text"
@@ -688,17 +945,24 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               <div className="word-card self-word-card">
                 <span className="tag">你的身份词</span>
                 {room.status === "lobby" ? (
-                  <strong>{isHost ? "你是房主，准备好后可直接开始本局" : "等待房主开局"}</strong>
-                ) : isCurrentPlayerWhiteboard && wordVisible ? (
-                  <>
-                    <div className="whiteboard-ink-card" aria-hidden="true" />
-                    <strong>你是白板</strong>
-                    <p className="whiteboard-breathing-hint">你没有词，请根据他人描述盲猜。</p>
-                  </>
-                ) : wordVisible ? (
-                  <strong>{currentPlayer.current_word ?? "暂未发词"}</strong>
+                  <strong className="word-card-lobby-text">{isHost ? "你是房主，准备好后可直接开始本局" : "等待房主开局"}</strong>
                 ) : (
-                  <strong>点击按钮查看你的词</strong>
+                  <div className={`word-card-flip${wordVisible ? " revealed" : ""}`}>
+                    <div className="word-card-face word-card-face-front">
+                      <p className="word-card-face-hint">点击下方按钮查看你的词</p>
+                    </div>
+                    <div className="word-card-face word-card-face-back">
+                      {isCurrentPlayerWhiteboard ? (
+                        <div className="whiteboard-face-content">
+                          <div className="whiteboard-ink-card" aria-hidden="true" />
+                          <strong className="whiteboard-title">你是白板</strong>
+                          <p className="whiteboard-breathing-hint">你没有词，请根据他人描述盲猜。</p>
+                        </div>
+                      ) : (
+                        <strong>{currentPlayer.current_word ?? "暂未发词"}</strong>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             )}
@@ -783,10 +1047,21 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                     <button
                       type="button"
                       className={`btn primary${roomLogic.busy ? " loading" : ""}`}
-                      onClick={() => roomLogic.publishVotingResult(roomId)}
+                      onClick={async () => {
+                        const confirmed = await roomLogic.askForConfirmation({
+                          title: "确认强制公布本轮投票结果？",
+                          description: "将立即结束当前投票并公布结果，未投票玩家将按当前票面结算。",
+                          confirmText: "确认公布",
+                          cancelText: "取消",
+                          tone: "danger",
+                        });
+
+                        if (!confirmed) return;
+                        void roomLogic.publishVotingResult(roomId, { force: true });
+                      }}
                       disabled={roomLogic.busy}
                     >
-                      {roomLogic.busy ? "处理中..." : "公布本轮投票结果"}
+                      {roomLogic.busy ? "处理中..." : "强制公布本轮投票结果"}
                     </button>
                   )}
                 </div>
@@ -819,16 +1094,34 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                       transition: { duration: 0.16, ease: "easeIn" },
                     }}
                   >
-                    <span className="player-main">
-                      第{index + 1}位 ·#{player.seat_no} {player.name} {player.session_id === sessionId ? "(你)" : ""}
+                    <span className="player-meta">
+                      <span className="player-index">玩家{player.seat_no}</span>
+                      <span className="player-content">
+                        <span className="player-name">
+                          {player.name}
+                          {player.session_id === sessionId && <span className="player-badge self">你</span>}
+                          {room.host_session_id === player.session_id && <span className="player-badge host">房主</span>}
+                        </span>
+                        <span className="player-note">
+                          发言位次 {index + 1} · {player.is_alive ? "存活" : "出局"}
+                          {room.status === "voting" && eligibleVoters.some((item) => item.id === player.id)
+                            ? ` · ${votedPlayerIds.has(player.id) ? "已投票" : "未投票"}`
+                            : ""}
+                        </span>
+                      </span>
                     </span>
                     <span className="player-side">
-                      <strong>{player.is_alive ? "存活" : "出局"}</strong>
                       {isHost && player.session_id !== sessionId && (
                         <button
                           type="button"
                           className={`btn danger tiny${roomLogic.busy ? " loading" : ""}`}
-                          onClick={() => roomLogic.kickPlayer(roomId, player)}
+                          onClick={async () => {
+                            suppressedLeavePlayerIdsRef.current.add(player.id);
+                            const ok = await roomLogic.kickPlayer(roomId, player);
+                            if (!ok) {
+                              suppressedLeavePlayerIdsRef.current.delete(player.id);
+                            }
+                          }}
                           disabled={roomLogic.busy}
                         >
                           踢出
@@ -845,8 +1138,16 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                 <h3>本轮投票</h3>
                 <p className="hint">
                   已投票人数：{votedCount}/{eligibleVoters.length}
-                  {remainingVoteSeconds != null ? ` · 剩余 ${remainingVoteSeconds} 秒` : ""}
                 </p>
+
+                {remainingVoteSeconds != null && (
+                  <div className="vote-countdown-wrap">
+                    <VoteCountdownRing
+                      remainingSeconds={remainingVoteSeconds}
+                      totalSeconds={Math.max(1, room.vote_duration_seconds ?? 60)}
+                    />
+                  </div>
+                )}
 
                 {!currentPlayer.is_alive && <p className="hint">你已出局，当前只能查看投票进度。</p>}
 
@@ -854,13 +1155,13 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   <p className="hint">
                     当前为平票加赛：候选人仅限
                     {tieCandidatePlayers.length > 0
-                      ? ` ${tieCandidatePlayers.map((p) => `#${p.seat_no} ${p.name}`).join("、")}`
+                      ? ` ${tieCandidatePlayers.map((p) => `玩家${p.seat_no} ${p.name}`).join("、")}`
                       : " 平票玩家"}
-                    ；仅其余存活玩家可投票。
+                    {restrictedTieBreak ? "；仅其余存活玩家可投票。" : "；本轮为全员平票，所有存活玩家可参与复投。"}
                   </p>
                 )}
 
-                {!canCurrentPlayerVote && room.vote_candidate_ids && room.vote_candidate_ids.length > 0 && (
+                {!canCurrentPlayerVote && restrictedTieBreak && room.vote_candidate_ids && room.vote_candidate_ids.length > 0 && (
                   <p className="hint">你是平票候选人，本轮不能投票，请等待其他存活玩家投票。</p>
                 )}
 
@@ -930,6 +1231,22 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
         <div className="notice-toast-stack">
           {forcedExitNotice && (
             <NoticeToast type="error" message={forcedExitNotice} onClose={() => {}} />
+          )}
+          {presenceJoinToast && (
+            <NoticeToast
+              type="success"
+              message={presenceJoinToast}
+              durationMs={1800}
+              onClose={() => setPresenceJoinToast("")}
+            />
+          )}
+          {presenceLeaveToast && (
+            <NoticeToast
+              type="info"
+              message={presenceLeaveToast}
+              durationMs={2000}
+              onClose={() => setPresenceLeaveToast("")}
+            />
           )}
           {voteSubmitToast && (
             <NoticeToast

@@ -548,6 +548,9 @@ export const useRoomLogic = (
       const now = new Date();
       const duration = normalizeVoteDurationSeconds(room.vote_duration_seconds);
       const deadline = new Date(now.getTime() + duration * 1000).toISOString();
+      const aliveCount = players.filter((player) => player.is_alive).length;
+      const candidateCount = room.vote_candidate_ids?.length ?? 0;
+      const restrictedTieBreak = candidateCount > 0 && candidateCount < aliveCount;
 
       const update = await supabase
         .from("rooms")
@@ -558,7 +561,9 @@ export const useRoomLogic = (
           vote_candidate_ids: room.vote_candidate_ids,
           result_summary:
             room.vote_candidate_ids && room.vote_candidate_ids.length > 0
-              ? `第 ${room.vote_round} 轮加赛投票进行中（限时 ${duration} 秒，仅非平票玩家可投票）`
+              ? restrictedTieBreak
+                ? `第 ${room.vote_round} 轮加赛投票进行中（限时 ${duration} 秒，仅非平票玩家可投票）`
+                : `第 ${room.vote_round} 轮全员平票复投进行中（限时 ${duration} 秒，所有存活玩家可投票）`
               : `第 ${room.vote_round} 轮投票进行中（限时 ${duration} 秒）`,
         })
         .eq("id", roomId);
@@ -574,7 +579,7 @@ export const useRoomLogic = (
       await options?.refreshRoom?.();
       return true;
     },
-    [room, isHost, options]
+    [room, isHost, players, options]
   );
 
   const castVote = useCallback(
@@ -633,8 +638,11 @@ export const useRoomLogic = (
   );
 
   const publishVotingResult = useCallback(
-    async (roomId: string): Promise<boolean> => {
-      if (!room) return false;
+    async (
+      roomId: string,
+      publishOptions?: { force?: boolean; silentNoop?: boolean }
+    ): Promise<{ ok: boolean; action: string; reason?: string }> => {
+      if (!room) return { ok: false, action: "noop", reason: "missing-room" };
 
       setBusy(true);
       setError("");
@@ -646,6 +654,7 @@ export const useRoomLogic = (
           body: JSON.stringify({
             expectedRound: room.round_number,
             expectedVoteRound: room.vote_round,
+            force: !!publishOptions?.force,
           }),
         });
 
@@ -662,38 +671,44 @@ export const useRoomLogic = (
 
         if (result.action === "revote-no-votes" || result.action === "revote-no-votes-pending") {
           setMessage("本轮无人有效投票（可能全员弃票），已进入讨论阶段，请房主开启下一轮投票。");
-          return false;
+          return { ok: false, action: result.action };
         }
 
         if (result.action === "revote-tie" || result.action === "revote-tie-pending") {
           setMessage("本轮出现平票，已进入讨论阶段，请房主开启加赛投票。");
-          return false;
+          return { ok: false, action: result.action };
         }
 
         if (result.action === "noop") {
-          setMessage("尚未到投票截止且未全员投票，暂不结算。");
-          return false;
+          if (!publishOptions?.silentNoop) {
+            if (publishOptions?.force) {
+              setMessage("当前轮次状态已变化或已结算，请刷新后重试。");
+            } else {
+              setMessage("尚未到投票截止且未全员投票，暂不结算。");
+            }
+          }
+          return { ok: false, action: "noop", reason: result.reason };
         }
 
         if (result.action === "finished") {
           setMessage("投票已自动结算，游戏已结束。");
-          return true;
+          return { ok: true, action: "finished" };
         }
 
         if (result.action === "whiteboard-guess-pending") {
           setMessage("白板已出局，进入临终猜词阶段。请白板玩家提交猜词。");
-          return true;
+          return { ok: true, action: "whiteboard-guess-pending" };
         }
 
         if (result.action === "eliminated") {
           setMessage("投票已自动结算，已淘汰一名玩家。");
-          return true;
+          return { ok: true, action: "eliminated" };
         }
 
-        return false;
+        return { ok: false, action: result.action ?? "unknown" };
       } catch (err) {
         setError(err instanceof Error ? err.message : "公布失败");
-        return false;
+        return { ok: false, action: "error", reason: err instanceof Error ? err.message : "unknown" };
       } finally {
         setBusy(false);
         await options?.refreshRoom?.();
@@ -815,7 +830,7 @@ export const useRoomLogic = (
 
       const confirmed = await askForConfirmation({
         title: "确认踢出玩家？",
-        description: `确认将玩家 #${targetPlayer.seat_no}（${targetPlayer.name}）移出房间吗？`,
+        description: `确认将玩家 玩家${targetPlayer.seat_no}（${targetPlayer.name}）移出房间吗？`,
         confirmText: "确认踢出",
         cancelText: "取消",
         tone: "danger",
@@ -893,6 +908,40 @@ export const useRoomLogic = (
     [room, isHost, options]
   );
 
+  const updateUndercoverCount = useCallback(
+    async (roomId: string, count: number): Promise<boolean> => {
+      if (!room || !isHost) return false;
+
+      if (!Number.isFinite(count)) {
+        setError("卧底人数格式无效。");
+        return false;
+      }
+
+      const undercoverCount = Math.trunc(count);
+      if (undercoverCount < 1 || undercoverCount > 3) {
+        setError("卧底人数必须在 1 到 3 之间。");
+        return false;
+      }
+
+      setBusy(true);
+      setError("");
+
+      const update = await supabase.from("rooms").update({ undercover_count: undercoverCount }).eq("id", roomId);
+
+      if (update.error) {
+        setError(update.error.message);
+        setBusy(false);
+        return false;
+      }
+
+      setMessage(`卧底人数已更新为 ${undercoverCount} 人。`);
+      setBusy(false);
+      await options?.refreshRoom?.();
+      return true;
+    },
+    [room, isHost, options]
+  );
+
   const updateVoteDuration = useCallback(
     async (roomId: string, seconds: number): Promise<boolean> => {
       if (!room || !isHost) return false;
@@ -943,6 +992,7 @@ export const useRoomLogic = (
     leaveRoom,
     kickPlayer,
     updateRoomCategory,
+    updateUndercoverCount,
     updateVoteDuration,
     askForConfirmation,
     resolveConfirmation,
