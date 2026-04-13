@@ -664,7 +664,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
           <section className="panel lobby-steps-panel">
             <LobbySteps currentStep={lobbyCurrentStep} />
             <p className="hint">
-              当前 {players.length} 人在房间，建议至少 3 人再开局。
+              当前 {players.length} 人在房间，至少 3 人才能开局。
             </p>
           </section>
         )}
@@ -945,7 +945,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               <div className="word-card self-word-card">
                 <span className="tag">你的身份词</span>
                 {room.status === "lobby" ? (
-                  <strong>{isHost ? "你是房主，准备好后可直接开始本局" : "等待房主开局"}</strong>
+                  <strong className="word-card-lobby-text">{isHost ? "你是房主，准备好后可直接开始本局" : "等待房主开局"}</strong>
                 ) : (
                   <div className={`word-card-flip${wordVisible ? " revealed" : ""}`}>
                     <div className="word-card-face word-card-face-front">

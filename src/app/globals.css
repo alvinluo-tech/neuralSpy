@@ -432,6 +432,81 @@ button:focus {
   margin-bottom: 8px;
 }
 
+.home-flow-panel {
+  padding: 16px 20px;
+}
+
+.home-flow-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.home-flow-head h2 {
+  margin: 0;
+  font-size: 1.02rem;
+}
+
+.home-flow-steps {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.home-flow-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.home-flow-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  border: 1px solid #c7d2cc;
+  color: #6a746f;
+  background: #f7faf8;
+  flex: 0 0 auto;
+}
+
+.home-flow-dot.current {
+  background: #1c665b;
+  border-color: #1c665b;
+  color: #f6fbf9;
+}
+
+.home-flow-dot.done {
+  background: #e2f2ec;
+  border-color: #9bcab6;
+  color: #1f5f4d;
+}
+
+.home-flow-label {
+  font-size: 0.82rem;
+  color: #77827b;
+  white-space: nowrap;
+}
+
+.home-flow-label.current,
+.home-flow-label.done {
+  color: #28372f;
+  font-weight: 700;
+}
+
+.home-flow-arrow {
+  color: #94a39a;
+  font-size: 0.9rem;
+  margin-left: 2px;
+}
+
 .lobby-steps-panel,
 .game-progress-panel {
   padding: 16px 20px;
@@ -769,7 +844,7 @@ button:focus {
   position: fixed;
   top: 16px;
   right: 16px;
-  z-index: 1100;
+  z-index: 1400;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -944,6 +1019,13 @@ button:focus {
   font-size: clamp(1.4rem, 5vw, 2.2rem);
 }
 
+.word-card-lobby-text {
+  font-size: clamp(1rem, 2.9vw, 1.5rem);
+  line-height: 1.35;
+  text-align: center;
+  max-width: min(560px, 100%);
+}
+
 .word-card-flip {
   width: min(360px, 100%);
   height: 178px;
@@ -1104,6 +1186,21 @@ button:focus {
     grid-template-columns: 1fr;
   }
 
+  .home-flow-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .home-flow-steps {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .home-flow-arrow {
+    display: none;
+  }
+
   .entry-option-primary {
     min-height: 186px;
   }
@@ -1171,5 +1268,9 @@ button:focus {
 
   .word-card-flip {
     height: 168px;
+  }
+
+  .word-card-lobby-text {
+    font-size: clamp(0.98rem, 5.4vw, 1.26rem);
   }
 }
