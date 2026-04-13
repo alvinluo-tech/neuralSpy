@@ -128,6 +128,90 @@ body {
   margin-bottom: 0;
 }
 
+.join-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1150;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 17, 15, 0.38);
+  backdrop-filter: blur(4px);
+  padding: 16px;
+}
+
+.join-drawer {
+  width: min(780px, 100%);
+  max-width: 560px;
+  border-radius: 20px;
+  border: 1px solid #c5d0c9;
+  background: linear-gradient(170deg, #fcfdfc 0%, #f1f5f1 100%);
+  box-shadow:
+    0 18px 42px rgba(19, 26, 21, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  padding: 16px 18px 24px;
+}
+
+.join-drawer-handle {
+  width: 56px;
+  height: 5px;
+  border-radius: 999px;
+  margin: 2px auto 12px;
+  background: #c6d0ca;
+  display: none;
+}
+
+.invite-code-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  max-width: 420px;
+  width: 100%;
+}
+
+.invite-code-cell {
+  margin-top: 0;
+  text-align: center;
+  text-transform: uppercase;
+  font-size: clamp(1.08rem, 3.2vw, 1.35rem);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  border-radius: 14px;
+  padding: 12px 0;
+  border: 1px solid #ccd6d0;
+  background: linear-gradient(180deg, #ffffff 0%, #f6f8f6 100%);
+  box-shadow: 0 6px 14px rgba(25, 32, 27, 0.1);
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    box-shadow 180ms ease;
+  caret-color: transparent;
+}
+
+.invite-code-cell:hover {
+  border-color: #a9bbb1;
+}
+
+.invite-code-cell:focus,
+.invite-code-cell:focus-visible {
+  outline: none;
+  border-color: #1f6b5f;
+  box-shadow:
+    0 10px 18px rgba(20, 48, 41, 0.2),
+    0 0 0 3px rgba(32, 108, 93, 0.2);
+  transform: translateY(-1px);
+}
+
+.invite-code-cell.filled {
+  border-color: #d7bf89;
+  background: linear-gradient(180deg, #fff6df 0%, #f9eccb 100%);
+  color: #5f4217;
+  box-shadow:
+    0 8px 16px rgba(71, 50, 19, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
 .panel,
 .reveal-panel {
   padding: 20px;
@@ -715,5 +799,30 @@ button:focus {
     right: 10px;
     left: 10px;
     width: auto;
+  }
+
+  .join-drawer-overlay {
+    align-items: flex-end;
+    background: linear-gradient(to top, rgba(18, 24, 20, 0.42), rgba(18, 24, 20, 0.08));
+    backdrop-filter: none;
+    padding: 0;
+  }
+
+  .join-drawer {
+    width: 100%;
+    max-width: none;
+    border-radius: 18px 18px 0 0;
+    border-bottom: none;
+    box-shadow: 0 -12px 28px rgba(19, 26, 21, 0.22);
+    padding: 12px 12px 18px;
+  }
+
+  .join-drawer-handle {
+    display: block;
+  }
+
+  .invite-code-grid {
+    gap: 6px;
+    max-width: none;
   }
 }

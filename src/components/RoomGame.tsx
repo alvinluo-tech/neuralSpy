@@ -31,6 +31,43 @@ const randomSessionId = () => {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 };
 
+const safeGetSessionValue = (key: string) => {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+};
+
+const safeSetSessionValue = (key: string, value: string) => {
+  try {
+    sessionStorage.setItem(key, value);
+    return;
+  } catch {}
+
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+};
+
+const safeGetLocalValue = (key: string) => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const safeSetLocalValue = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+};
+
 const resolveWinnerRole = (players: Array<{ is_alive: boolean; is_undercover: boolean; current_word: string | null }>) => {
   const aliveUndercover = players.filter((player) => player.is_alive && player.is_undercover).length;
   const aliveWhiteboard = players.filter((player) => player.is_alive && isWhiteboardRole(player)).length;
@@ -116,7 +153,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   const [showSyncToast, setShowSyncToast] = useState(false);
   const [whiteboardCountDraft, setWhiteboardCountDraft] = useState(() => {
     if (typeof window === "undefined") return 1;
-    const raw = localStorage.getItem(`${WHITEBOARD_COUNT_STORAGE_PREFIX}${roomId}`);
+    const raw = safeGetLocalValue(`${WHITEBOARD_COUNT_STORAGE_PREFIX}${roomId}`);
     if (!raw) return 1;
     return normalizeWhiteboardCount(Number(raw));
   });
@@ -131,13 +168,13 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      const raw = sessionStorage.getItem(SESSION_KEY);
+      const raw = safeGetSessionValue(SESSION_KEY);
       if (raw) {
         setSessionId(raw);
         return;
       }
       const newId = randomSessionId();
-      sessionStorage.setItem(SESSION_KEY, newId);
+      safeSetSessionValue(SESSION_KEY, newId);
       setSessionId(newId);
     }, 0);
     return () => window.clearTimeout(timer);
@@ -282,11 +319,11 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
     if (gameResultTrackedKeyRef.current === trackingKey) return;
 
     if (typeof window !== "undefined") {
-      if (sessionStorage.getItem(trackingKey)) {
+      if (safeGetSessionValue(trackingKey)) {
         gameResultTrackedKeyRef.current = trackingKey;
         return;
       }
-      sessionStorage.setItem(trackingKey, "1");
+      safeSetSessionValue(trackingKey, "1");
     }
 
     gameResultTrackedKeyRef.current = trackingKey;
@@ -560,7 +597,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                     onChange={(event) => {
                       const nextValue = normalizeWhiteboardCount(Number(event.target.value));
                       setWhiteboardCountDraft(nextValue);
-                      localStorage.setItem(`${WHITEBOARD_COUNT_STORAGE_PREFIX}${roomId}`, String(nextValue));
+                      safeSetLocalValue(`${WHITEBOARD_COUNT_STORAGE_PREFIX}${roomId}`, String(nextValue));
                     }}
                   />
                 </label>
@@ -608,7 +645,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               <div className="word-card self-word-card">
                 <span className="tag">你的身份词</span>
                 {room.status === "lobby" ? (
-                  <strong>等待房主开局</strong>
+                  <strong>{isHost ? "你是房主，准备好后可直接开始本局" : "等待房主开局"}</strong>
                 ) : isCurrentPlayerWhiteboard && wordVisible ? (
                   <>
                     <div className="whiteboard-ink-card" aria-hidden="true" />

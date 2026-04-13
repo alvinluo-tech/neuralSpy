@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 import { supabase } from "@/lib/supabase";
 import { useCategorySearch } from "@/hooks/useCategorySearch";
 import { useTrackPage } from "@/hooks/useTrackPage";
@@ -10,6 +10,7 @@ import { identifySession, trackEvent } from "@/lib/umami";
 
 const SESSION_KEY = "undercover.session.id";
 const PLAYER_SESSION_STARTED_TRACK_PREFIX = "undercover.player.session.started.tracked.";
+const INVITE_CODE_LENGTH = 6;
 const randomCode = () => {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
@@ -27,15 +28,41 @@ const normalizeVoteDurationSeconds = (value: number) => {
   return normalized >= 0 ? normalized : 0;
 };
 
+const safeGetSessionValue = (key: string) => {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+};
+
+const safeSetSessionValue = (key: string, value: string) => {
+  try {
+    sessionStorage.setItem(key, value);
+    return;
+  } catch {}
+
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+};
+
 type EntryMode = "create" | "join";
 
 export default function HomePage() {
   const router = useRouter();
+  const joinCodeInputRefs = useRef<Array<HTMLInputElement | null>>([]);
 
   const [sessionId, setSessionId] = useState("");
   const [entryMode, setEntryMode] = useState<EntryMode | null>(null);
   const [nickname, setNickname] = useState("");
-  const [joinCode, setJoinCode] = useState("");
+  const [joinCodeSlots, setJoinCodeSlots] = useState<string[]>(() =>
+    Array.from({ length: INVITE_CODE_LENGTH }, () => "")
+  );
   const [createCategory, setCreateCategory] = useState("游戏");
   const [createUndercoverCount, setCreateUndercoverCount] = useState(1);
   const [createVoteEnabled, setCreateVoteEnabled] = useState(true);
@@ -52,18 +79,100 @@ export default function HomePage() {
     () => buildCategorySuggestions(categorySearchQuery),
     [buildCategorySuggestions, categorySearchQuery],
   );
+  const joinCode = joinCodeSlots.join("");
+
+  const focusJoinCodeInput = (index: number) => {
+    const target = joinCodeInputRefs.current[index];
+    if (!target) return;
+    target.focus();
+    target.select();
+  };
+
+  const resetJoinCodeSlots = () => {
+    setJoinCodeSlots(Array.from({ length: INVITE_CODE_LENGTH }, () => ""));
+  };
+
+  const handleJoinCodeInput = (index: number, rawValue: string) => {
+    const normalized = rawValue.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const nextChar = normalized.slice(-1);
+
+    setJoinCodeSlots((prev) => {
+      const next = [...prev];
+      next[index] = nextChar;
+      return next;
+    });
+
+    if (nextChar && index < INVITE_CODE_LENGTH - 1) {
+      focusJoinCodeInput(index + 1);
+    }
+  };
+
+  const handleJoinCodeKeyDown = (index: number, event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Backspace") {
+      event.preventDefault();
+      setJoinCodeSlots((prev) => {
+        const next = [...prev];
+        if (next[index]) {
+          next[index] = "";
+          return next;
+        }
+        if (index > 0) {
+          next[index - 1] = "";
+          window.setTimeout(() => focusJoinCodeInput(index - 1), 0);
+        }
+        return next;
+      });
+      return;
+    }
+
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      if (index > 0) focusJoinCodeInput(index - 1);
+      return;
+    }
+
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      if (index < INVITE_CODE_LENGTH - 1) focusJoinCodeInput(index + 1);
+    }
+  };
+
+  const handleJoinCodePaste = (event: ClipboardEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const pasted = event.clipboardData
+      .getData("text")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, INVITE_CODE_LENGTH)
+      .split("");
+
+    setJoinCodeSlots(
+      Array.from({ length: INVITE_CODE_LENGTH }, (_, index) => pasted[index] ?? "")
+    );
+
+    const nextFocusIndex = Math.min(pasted.length, INVITE_CODE_LENGTH - 1);
+    window.setTimeout(() => focusJoinCodeInput(nextFocusIndex), 0);
+  };
+
+  useEffect(() => {
+    if (entryMode !== "join") return;
+    const firstEmptyIndex = joinCodeSlots.findIndex((char) => !char);
+    const targetIndex = firstEmptyIndex === -1 ? INVITE_CODE_LENGTH - 1 : firstEmptyIndex;
+    const timer = window.setTimeout(() => focusJoinCodeInput(targetIndex), 0);
+    return () => window.clearTimeout(timer);
+  }, [entryMode, joinCodeSlots]);
 
   useTrackPage("/", "Home - Entry", !!sessionId);
 
   // Initialize session
   useEffect(() => {
-    const raw = sessionStorage.getItem(SESSION_KEY);
+    const raw = safeGetSessionValue(SESSION_KEY);
     if (raw) {
       setSessionId(raw);
       return;
     }
     const newId = randomSessionId();
-    sessionStorage.setItem(SESSION_KEY, newId);
+    safeSetSessionValue(SESSION_KEY, newId);
     setSessionId(newId);
   }, []);
 
@@ -77,12 +186,12 @@ export default function HomePage() {
     });
 
     const sessionStartKey = `${PLAYER_SESSION_STARTED_TRACK_PREFIX}${sessionId}`;
-    if (sessionStorage.getItem(sessionStartKey)) return;
+    if (safeGetSessionValue(sessionStartKey)) return;
 
     trackEvent("player_session_started", {
       page: "home",
     });
-    sessionStorage.setItem(sessionStartKey, "1");
+    safeSetSessionValue(sessionStartKey, "1");
   }, [sessionId, nickname]);
 
   const createRoom = async () => {
@@ -167,6 +276,11 @@ export default function HomePage() {
     const code = joinCode.trim().toUpperCase();
     if (!code) {
       setError("请输入房间邀请码。");
+      return;
+    }
+
+    if (code.length !== INVITE_CODE_LENGTH) {
+      setError("请输入 6 位邀请码。");
       return;
     }
 
@@ -282,7 +396,14 @@ export default function HomePage() {
             <article className="panel entry-option-card">
               <h2>加入已有房间</h2>
               <p className="hint">输入邀请码，快速加入朋友已经创建的房间。</p>
-              <button type="button" className="btn" onClick={() => setEntryMode("join")}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  resetJoinCodeSlots();
+                  setEntryMode("join");
+                }}
+              >
                 我去加入
               </button>
             </article>
@@ -462,12 +583,19 @@ export default function HomePage() {
         )}
 
         {entryMode === "join" && (
-          <section className="panel-grid entry-grid entry-single-grid">
-            <article className="panel">
+          <div
+            className="join-drawer-overlay"
+            onClick={() => {
+              if (busy) return;
+              setEntryMode(null);
+            }}
+          >
+            <section className="join-drawer" onClick={(event) => event.stopPropagation()}>
+              <div className="join-drawer-handle" aria-hidden="true" />
               <div className="entry-form-head">
                 <h2>加入房间</h2>
-                <button type="button" className="btn ghost" onClick={() => setEntryMode(null)}>
-                  返回选择
+                <button type="button" className="btn ghost" onClick={() => setEntryMode(null)} disabled={busy}>
+                  返回
                 </button>
               </div>
 
@@ -480,20 +608,36 @@ export default function HomePage() {
                   placeholder="例如：Bella"
                 />
               </label>
+
               <label>
                 邀请码
-                <input
-                  type="text"
-                  value={joinCode}
-                  onChange={(event) => setJoinCode(event.target.value.toUpperCase())}
-                  placeholder="例如：Q8K2MX"
-                />
+                <div className="invite-code-grid" onPaste={handleJoinCodePaste}>
+                  {joinCodeSlots.map((char, index) => (
+                    <input
+                      key={`invite-slot-${index}`}
+                      ref={(element) => {
+                        joinCodeInputRefs.current[index] = element;
+                      }}
+                      type="text"
+                      className={`invite-code-cell${char ? " filled" : ""}`}
+                      inputMode="text"
+                      autoComplete="one-time-code"
+                      maxLength={1}
+                      value={char}
+                      onChange={(event) => handleJoinCodeInput(index, event.target.value)}
+                      onKeyDown={(event) => handleJoinCodeKeyDown(index, event)}
+                      aria-label={`邀请码第 ${index + 1} 位`}
+                    />
+                  ))}
+                </div>
+                <p className="hint">请输入 6 位邀请码（字母或数字）。</p>
               </label>
+
               <button type="button" className="btn primary" onClick={joinRoom} disabled={busy}>
                 {busy ? "处理中..." : "加入房间"}
               </button>
-            </article>
-          </section>
+            </section>
+          </div>
         )}
 
         <div className="notice-toast-stack">
