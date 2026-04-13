@@ -65,7 +65,7 @@ const clamp = (value: number, min: number, max: number) => {
 };
 
 const normalizeVoteDurationSeconds = (value: number | null | undefined) => {
-  if (!Number.isFinite(value)) return 60;
+  if (typeof value !== "number" || !Number.isFinite(value)) return 60;
   const normalized = Math.trunc(value);
   return normalized >= 0 ? normalized : 0;
 };
