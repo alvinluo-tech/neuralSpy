@@ -41,6 +41,7 @@ export async function POST(
     const body = (await request.json().catch(() => ({}))) as {
       expectedRound?: number;
       expectedVoteRound?: number;
+      force?: boolean;
     };
 
     const roomRes = await supabaseAdmin
@@ -122,8 +123,9 @@ export async function POST(
     const allVoted = voterScopeIds.length > 0 && uniqueVoters >= voterScopeIds.length;
     const deadlineReached =
       !!room.vote_deadline_at && Date.now() >= Date.parse(room.vote_deadline_at);
+    const forceSettle = body.force === true;
 
-    if (!allVoted && !deadlineReached) {
+    if (!forceSettle && !allVoted && !deadlineReached) {
       return NextResponse.json({
         ok: true,
         action: "noop",

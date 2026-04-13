@@ -385,27 +385,31 @@ export default function HomePage() {
         </section>
 
         {entryMode === null && (
-          <section className="panel-grid entry-choice-grid">
-            <article className="panel entry-option-card">
+          <section className="entry-cta-stack">
+            <article className="panel entry-option-card entry-option-primary">
               <h2>创建新房间</h2>
               <p className="hint">成为房主并设置类别、卧底人数和投票规则。</p>
-              <button type="button" className="btn primary" onClick={() => setEntryMode("create")}>
-                我来创建
+              <button type="button" className="btn primary major" onClick={() => setEntryMode("create")}>
+                我来创建房间
               </button>
             </article>
 
-            <article className="panel entry-option-card">
+            <div className="entry-cta-divider" aria-hidden="true">
+              <span>或者</span>
+            </div>
+
+            <article className="panel entry-option-card entry-option-secondary">
               <h2>加入已有房间</h2>
               <p className="hint">输入邀请码，快速加入朋友已经创建的房间。</p>
               <button
                 type="button"
-                className="btn"
+                className="btn ghost minor"
                 onClick={() => {
                   resetJoinCodeSlots();
                   setEntryMode("join");
                 }}
               >
-                我去加入
+                加入朋友的房间
               </button>
             </article>
           </section>
