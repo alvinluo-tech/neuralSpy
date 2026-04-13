@@ -57,13 +57,13 @@ export default function HomePage() {
 
   // Initialize session
   useEffect(() => {
-    const raw = localStorage.getItem(SESSION_KEY);
+    const raw = sessionStorage.getItem(SESSION_KEY);
     if (raw) {
       setSessionId(raw);
       return;
     }
     const newId = randomSessionId();
-    localStorage.setItem(SESSION_KEY, newId);
+    sessionStorage.setItem(SESSION_KEY, newId);
     setSessionId(newId);
   }, []);
 

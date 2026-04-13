@@ -1,4 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  detectWinnerByRole,
+  isWhiteboardRole,
+  WHITEBOARD_GUESS_PENDING_MARKER,
+} from "@/lib/gameEngine";
 import { getSupabaseAdmin } from "@/lib/server/supabaseAdmin";
 
 type RoomRow = {
@@ -18,20 +23,12 @@ type PlayerRow = {
   name: string;
   is_undercover: boolean;
   is_alive: boolean;
+  current_word: string | null;
 };
 
 type VoteRow = {
   voter_player_id: string;
   target_player_id: string | null;
-};
-
-const detectWinner = (players: PlayerRow[]) => {
-  const aliveUndercover = players.filter((player) => player.is_alive && player.is_undercover).length;
-  const aliveCivilian = players.filter((player) => player.is_alive && !player.is_undercover).length;
-
-  if (aliveUndercover === 0) return "平民" as const;
-  if (aliveUndercover >= aliveCivilian) return "卧底" as const;
-  return null;
 };
 
 export async function POST(
@@ -77,7 +74,7 @@ export async function POST(
 
     const playersRes = await supabaseAdmin
       .from("players")
-      .select("id, seat_no, name, is_undercover, is_alive")
+      .select("id, seat_no, name, is_undercover, is_alive, current_word")
       .eq("room_id", room.id);
 
     if (playersRes.error) {
@@ -232,9 +229,39 @@ export async function POST(
     const nextPlayers = players.map((player) =>
       player.id === eliminatedId ? { ...player, is_alive: false } : player,
     );
-
-    const winner = detectWinner(nextPlayers);
     const summary = `第 ${room.vote_round} 轮：玩家 ${eliminatedPlayer.seat_no}（${eliminatedPlayer.name}）出局。`;
+
+    if (isWhiteboardRole(eliminatedPlayer) && players.length >= 4) {
+      const pendingSummary = `${summary} 白板玩家可进行临终猜词。${WHITEBOARD_GUESS_PENDING_MARKER}`;
+      const whiteboardPendingRes = await supabaseAdmin
+        .from("rooms")
+        .update({
+          status: "playing",
+          vote_round: room.vote_round + 1,
+          vote_started_at: null,
+          vote_deadline_at: null,
+          vote_candidate_ids: null,
+          last_eliminated_player_id: eliminatedId,
+          result_summary: pendingSummary,
+        })
+        .eq("id", room.id)
+        .eq("status", "voting")
+        .eq("round_number", room.round_number)
+        .select("id")
+        .maybeSingle();
+
+      if (whiteboardPendingRes.error) {
+        return NextResponse.json({ error: whiteboardPendingRes.error.message }, { status: 500 });
+      }
+
+      if (!whiteboardPendingRes.data) {
+        return NextResponse.json({ ok: true, action: "noop", reason: "already-settled" });
+      }
+
+      return NextResponse.json({ ok: true, action: "whiteboard-guess-pending", eliminatedId });
+    }
+
+    const winner = detectWinnerByRole(nextPlayers);
 
     if (winner) {
       const finishRes = await supabaseAdmin

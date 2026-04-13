@@ -17,21 +17,35 @@ import { NoticeToast } from "@/components/ui/notice-toast";
 import { useRoomData } from "@/hooks/useRoomData";
 import { AI_GENERATING_SUMMARY, useRoomLogic } from "@/hooks/useRoomLogic";
 import { useCategorySearch } from "@/hooks/useCategorySearch";
+import {
+  isWhiteboardRole,
+  sanitizeRoomSummary,
+  WHITEBOARD_GUESS_PENDING_MARKER,
+} from "@/lib/gameEngine";
 import { trackEvent } from "@/lib/umami";
 import { supabase } from "@/lib/supabase";
 
 const SESSION_KEY = "undercover.session.id";
+const WHITEBOARD_COUNT_STORAGE_PREFIX = "undercover.room.whiteboard.count.";
 const randomSessionId = () => {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 };
 
-const resolveWinnerRole = (players: Array<{ is_alive: boolean; is_undercover: boolean }>) => {
+const resolveWinnerRole = (players: Array<{ is_alive: boolean; is_undercover: boolean; current_word: string | null }>) => {
   const aliveUndercover = players.filter((player) => player.is_alive && player.is_undercover).length;
-  const aliveCivilian = players.filter((player) => player.is_alive && !player.is_undercover).length;
+  const aliveWhiteboard = players.filter((player) => player.is_alive && isWhiteboardRole(player)).length;
+  const aliveCivilian = players.filter(
+    (player) => player.is_alive && !player.is_undercover && player.current_word !== null,
+  ).length;
 
-  if (aliveUndercover === 0) return "civilian";
-  if (aliveUndercover >= aliveCivilian) return "undercover";
+  if (aliveUndercover + aliveWhiteboard === 0) return "civilian";
+  if (aliveUndercover + aliveWhiteboard >= aliveCivilian) return "undercover";
   return "unknown";
+};
+
+const normalizeWhiteboardCount = (value: number) => {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(Math.trunc(value), 0), 2);
 };
 
 type RoomGameProps = {
@@ -100,6 +114,13 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   const [roomCategorySearchOpen, setRoomCategorySearchOpen] = useState(false);
   const [selectedAiModel, setSelectedAiModel] = useState(AUTO_MODEL_VALUE);
   const [showSyncToast, setShowSyncToast] = useState(false);
+  const [whiteboardCountDraft, setWhiteboardCountDraft] = useState(() => {
+    if (typeof window === "undefined") return 1;
+    const raw = localStorage.getItem(`${WHITEBOARD_COUNT_STORAGE_PREFIX}${roomId}`);
+    if (!raw) return 1;
+    return normalizeWhiteboardCount(Number(raw));
+  });
+  const [whiteboardGuess, setWhiteboardGuess] = useState("");
 
   const { room, players, votes, loading: roomLoading, syncing: roomSyncing, error: roomError, loadRoomData } =
     useRoomData(roomId);
@@ -110,13 +131,13 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      const raw = localStorage.getItem(SESSION_KEY);
+      const raw = sessionStorage.getItem(SESSION_KEY);
       if (raw) {
         setSessionId(raw);
         return;
       }
       const newId = randomSessionId();
-      localStorage.setItem(SESSION_KEY, newId);
+      sessionStorage.setItem(SESSION_KEY, newId);
       setSessionId(newId);
     }, 0);
     return () => window.clearTimeout(timer);
@@ -195,6 +216,17 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
         })();
   const currentRoomCategory = room?.category ?? "";
   const currentVoteDuration = room?.vote_duration_seconds ?? 60;
+  const whiteboardDisabledByThreePlayerMode = players.length === 3;
+  const effectiveWhiteboardCount = whiteboardDisabledByThreePlayerMode ? 0 : whiteboardCountDraft;
+  const isCurrentPlayerWhiteboard =
+    !!currentPlayer && room?.status !== "lobby" && isWhiteboardRole(currentPlayer);
+  const whiteboardGuessPendingForCurrentPlayer =
+    !!currentPlayer &&
+    isCurrentPlayerWhiteboard &&
+    !currentPlayer.is_alive &&
+    currentPlayer.id === room?.last_eliminated_player_id &&
+    (room?.result_summary ?? "").includes(WHITEBOARD_GUESS_PENDING_MARKER);
+  const displayRoomSummary = sanitizeRoomSummary(room?.result_summary);
   const roomCategoryInputValue = roomCategoryDraftValue ?? currentRoomCategory;
   const trimmedCategoryDraft = roomCategoryInputValue.trim();
   const categoryDirty = trimmedCategoryDraft !== currentRoomCategory.trim();
@@ -517,6 +549,30 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
 
             {isHost && (
               <div className="inline-row room-category-editor">
+                <label style={{ flex: 1 }}>
+                  白板人数（0-2）
+                  <input
+                    type="number"
+                    min={0}
+                    max={2}
+                    value={effectiveWhiteboardCount}
+                    disabled={roomLogic.busy || room.status === "voting" || whiteboardDisabledByThreePlayerMode}
+                    onChange={(event) => {
+                      const nextValue = normalizeWhiteboardCount(Number(event.target.value));
+                      setWhiteboardCountDraft(nextValue);
+                      localStorage.setItem(`${WHITEBOARD_COUNT_STORAGE_PREFIX}${roomId}`, String(nextValue));
+                    }}
+                  />
+                </label>
+              </div>
+            )}
+
+            {whiteboardDisabledByThreePlayerMode && (
+              <p className="hint">3 人局暂不支持白板，已自动禁用。</p>
+            )}
+
+            {isHost && (
+              <div className="inline-row room-category-editor">
                 <input
                   type="text"
                   inputMode="numeric"
@@ -553,6 +609,12 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                 <span className="tag">你的身份词</span>
                 {room.status === "lobby" ? (
                   <strong>等待房主开局</strong>
+                ) : isCurrentPlayerWhiteboard && wordVisible ? (
+                  <>
+                    <div className="whiteboard-ink-card" aria-hidden="true" />
+                    <strong>你是白板</strong>
+                    <p className="whiteboard-breathing-hint">你没有词，请根据他人描述盲猜。</p>
+                  </>
                 ) : wordVisible ? (
                   <strong>{currentPlayer.current_word ?? "暂未发词"}</strong>
                 ) : (
@@ -610,7 +672,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                     type="button"
                     className="btn primary"
                     onClick={() =>
-                      roomLogic.startRound(roomId, room.category, room.undercover_count, categories, {
+                      roomLogic.startRound(roomId, room.category, room.undercover_count, effectiveWhiteboardCount, categories, {
                         provider: "groq",
                         model: effectiveModel,
                       })
@@ -720,9 +782,34 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               </div>
             )}
 
-            {room.result_summary && <p className="hint room-summary">{room.result_summary}</p>}
+            {displayRoomSummary && <p className="hint room-summary">{displayRoomSummary}</p>}
           </article>
         </section>
+
+        {whiteboardGuessPendingForCurrentPlayer && (
+          <div className="whiteboard-drawer" role="dialog" aria-modal="true" aria-label="白板临终猜词">
+            <div className="whiteboard-drawer-card">
+              <h3>白板临终猜词</h3>
+              <p className="hint">你已出局。猜中平民词即可触发白板单独获胜。</p>
+              <input
+                type="text"
+                value={whiteboardGuess}
+                onChange={(event) => setWhiteboardGuess(event.target.value)}
+                placeholder="请输入你猜测的平民词"
+              />
+              <div className="actions-row">
+                <button
+                  type="button"
+                  className="btn primary"
+                  disabled={roomLogic.busy || !whiteboardGuess.trim()}
+                  onClick={() => roomLogic.submitWhiteboardGuess(roomId, whiteboardGuess, "grok")}
+                >
+                  提交猜词
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="notice-toast-stack">
           {forcedExitNotice && (

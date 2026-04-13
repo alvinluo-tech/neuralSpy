@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { detectWinnerByRole, validateAndAssignRoles } from "@/lib/gameEngine";
 import { trackEvent } from "@/lib/umami";
 import type { Category, Subcategory } from "./useCategorySearch";
 import type { RoomRow, PlayerRow } from "./useRoomData";
@@ -60,53 +61,12 @@ const secureRandomInt = (maxExclusive: number) => {
   return value % maxExclusive;
 };
 
-const clamp = (value: number, min: number, max: number) => {
-  return Math.min(Math.max(value, min), max);
-};
-
 const normalizeVoteDurationSeconds = (value: number | null | undefined) => {
   if (typeof value !== "number" || !Number.isFinite(value)) return 60;
   const normalized = Math.trunc(value);
   return normalized >= 0 ? normalized : 0;
 };
 
-const undercoverKey = (ids: string[]) => {
-  return [...ids].sort().join("|");
-};
-
-const pickUndercoverIds = (players: PlayerRow[], undercoverCount: number, previousKey?: string) => {
-  const pool = [...players.map((player) => player.id)];
-  if (undercoverCount >= pool.length) {
-    return pool;
-  }
-
-  let fallback = pool.slice(0, undercoverCount);
-
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const shuffled = [...pool];
-    for (let i = shuffled.length - 1; i > 0; i -= 1) {
-      const j = secureRandomInt(i + 1);
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-
-    const candidate = shuffled.slice(0, undercoverCount);
-    fallback = candidate;
-    if (!previousKey || undercoverKey(candidate) !== previousKey) {
-      return candidate;
-    }
-  }
-
-  return fallback;
-};
-
-const detectWinner = (players: PlayerRow[]) => {
-  const aliveUndercover = players.filter((player) => player.is_alive && player.is_undercover).length;
-  const aliveCivilian = players.filter((player) => player.is_alive && !player.is_undercover).length;
-
-  if (aliveUndercover === 0) return "平民" as const;
-  if (aliveUndercover >= aliveCivilian) return "卧底" as const;
-  return null;
-};
 
 const normalizePairKey = (pair: { civilian: string; undercover: string }) => {
   const left = pair.civilian.trim().toLowerCase();
@@ -210,6 +170,7 @@ export const useRoomLogic = (
       roomId: string,
       category: string,
       undercoverCount: number,
+      whiteboardCount: number,
       allCategories: Category[],
       aiOptions?: {
         provider?: AiProvider;
@@ -475,10 +436,22 @@ export const useRoomLogic = (
           throw new Error("该类别可用词组已耗尽，请修改类别后再开局。");
         }
 
-        const currentUndercoverCount = clamp(undercoverCount, 1, Math.max(players.length - 1, 1));
-        const previousUndercover = players.filter((p) => p.is_undercover).map((p) => p.id);
-        const previousKey = room.round_number > 0 ? undercoverKey(previousUndercover) : undefined;
-        const undercoverIds = pickUndercoverIds(players, currentUndercoverCount, previousKey);
+        const sortedPlayers = [...players].sort((a, b) => a.seat_no - b.seat_no);
+        const nextRound = room.round_number + 1;
+        const firstSpeakerPlayerId =
+          sortedPlayers.length > 0
+            ? sortedPlayers[Math.max(nextRound - 1, 0) % sortedPlayers.length]?.id
+            : undefined;
+
+        const rolePlan = validateAndAssignRoles(
+          sortedPlayers.map((player) => player.id),
+          undercoverCount,
+          whiteboardCount,
+          { firstSpeakerPlayerId },
+        );
+
+        const undercoverIds = rolePlan.spyIds;
+        const whiteboardIds = rolePlan.whiteboardIds;
 
         await supabase
           .from("players")
@@ -497,6 +470,16 @@ export const useRoomLogic = (
           })
           .in("id", undercoverIds);
 
+        if (whiteboardIds.length > 0) {
+          await supabase
+            .from("players")
+            .update({
+              is_undercover: false,
+              current_word: null,
+            })
+            .in("id", whiteboardIds);
+        }
+
         await supabase
           .from("rooms")
           .update({
@@ -507,22 +490,33 @@ export const useRoomLogic = (
             vote_deadline_at: null,
             vote_candidate_ids: null,
             last_eliminated_player_id: null,
-            result_summary: "本局已开始，系统已为每位玩家发词。",
+            result_summary:
+              whiteboardIds.length > 0
+                ? `本局已开始，系统已发词（含 ${whiteboardIds.length} 名白板）。`
+                : "本局已开始，系统已为每位玩家发词。",
           })
           .eq("id", roomId);
 
+        const modeTip =
+          players.length === 3 && whiteboardCount > 0
+            ? "3 人局已自动关闭白板。"
+            : whiteboardIds.length > 0
+              ? `本局含 ${whiteboardIds.length} 名白板。`
+              : "本局无白板。";
+
         setMessage(
           isRandomAllMode
-            ? `本局已开，系统随机类别：${pickedCategory}。AI 已生成 1 组词并发词。`
-            : "本局已开，AI 仅生成 1 组词并已发词。"
+            ? `本局已开，系统随机类别：${pickedCategory}。AI 已生成 1 组词并发词。${modeTip}`
+            : `本局已开，AI 仅生成 1 组词并已发词。${modeTip}`
         );
 
         trackEvent("Room_Config", {
           players_count: players.length,
-          has_whiteboard: false,
+          has_whiteboard: whiteboardIds.length > 0,
+          whiteboard_count: whiteboardIds.length,
           vote_enabled: room.vote_enabled,
           vote_duration_seconds: room.vote_duration_seconds ?? 60,
-          undercover_count: currentUndercoverCount,
+          undercover_count: rolePlan.normalizedSpyCount,
           category: pickedCategory,
         });
 
@@ -689,6 +683,11 @@ export const useRoomLogic = (
           return true;
         }
 
+        if (result.action === "whiteboard-guess-pending") {
+          setMessage("白板已出局，进入临终猜词阶段。请白板玩家提交猜词。");
+          return true;
+        }
+
         if (result.action === "eliminated") {
           setMessage("投票已自动结算，已淘汰一名玩家。");
           return true;
@@ -704,6 +703,68 @@ export const useRoomLogic = (
       }
     },
     [room, options]
+  );
+
+  const submitWhiteboardGuess = useCallback(
+    async (roomId: string, guess: string, provider: "grok" | "gemini" = "grok"): Promise<boolean> => {
+      if (!room || !currentPlayer) return false;
+
+      const normalizedGuess = guess.trim();
+      if (!normalizedGuess) {
+        setError("请输入你猜测的平民词。");
+        return false;
+      }
+
+      setBusy(true);
+      setError("");
+
+      try {
+        const response = await fetch(`/api/rooms/${roomId}/whiteboard-guess`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            playerId: currentPlayer.id,
+            guess: normalizedGuess,
+            provider,
+          }),
+        });
+
+        const result = (await response.json()) as {
+          ok?: boolean;
+          action?: string;
+          error?: string;
+          winner?: string;
+        };
+
+        if (!response.ok) {
+          throw new Error(result.error ?? "白板猜词提交失败");
+        }
+
+        if (result.action === "whiteboard-solo-win") {
+          setMessage("白板猜词成功，白板单独获胜！");
+          return true;
+        }
+
+        if (result.action === "whiteboard-guess-failed") {
+          setMessage(result.winner ? `白板猜词失败。当前胜方：${result.winner}阵营。` : "白板猜词失败，游戏继续。");
+          return true;
+        }
+
+        if (result.action === "noop") {
+          setMessage("当前没有可提交的白板猜词。");
+          return false;
+        }
+
+        return false;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "白板猜词提交失败");
+        return false;
+      } finally {
+        setBusy(false);
+        await options?.refreshRoom?.();
+      }
+    },
+    [room, currentPlayer, options],
   );
 
   const leaveRoom = useCallback(
@@ -773,7 +834,7 @@ export const useRoomLogic = (
 
         if (room.status !== "lobby") {
           const nextPlayers = players.filter((p) => p.id !== targetPlayer.id);
-          const winner = detectWinner(nextPlayers);
+          const winner = detectWinnerByRole(nextPlayers);
 
           if (winner) {
             await supabase
@@ -881,6 +942,7 @@ export const useRoomLogic = (
     openVoting,
     castVote,
     publishVotingResult,
+    submitWhiteboardGuess,
     leaveRoom,
     kickPlayer,
     updateRoomCategory,
