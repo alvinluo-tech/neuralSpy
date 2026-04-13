@@ -458,7 +458,7 @@ export default function HomePage() {
               <h2>创建新房间</h2>
               <p className="hint">成为房主并设置类别、卧底人数和投票规则。</p>
               <button type="button" className="btn primary major" onClick={() => setEntryMode("create")}>
-                我来创建房间
+                我来创建
               </button>
             </article>
 
@@ -477,7 +477,7 @@ export default function HomePage() {
                   setEntryMode("join");
                 }}
               >
-                加入朋友的房间
+                我去加入
               </button>
             </article>
           </section>

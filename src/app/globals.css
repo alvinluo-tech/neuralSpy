@@ -1047,6 +1047,7 @@ button:focus {
   place-items: center;
   gap: 10px;
   padding: 12px;
+  overflow: hidden;
   backface-visibility: hidden;
 }
 
@@ -1076,14 +1077,47 @@ button:focus {
     radial-gradient(circle at 70% 56%, rgba(52, 58, 55, 0.12), transparent 46%),
     linear-gradient(170deg, #fbfbf9, #f0f2ef);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
-  animation: whiteboard-ink-float 4200ms ease-in-out infinite;
+  animation-name: whiteboard-ink-float;
+  animation-duration: 2800ms;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: 2;
+  animation-fill-mode: forwards;
+}
+
+.whiteboard-face-content {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.word-card-face-back .whiteboard-ink-card {
+  width: min(220px, 86%);
+  height: 88px;
+}
+
+.whiteboard-title {
+  margin: 0;
+  font-size: clamp(1.18rem, 4.2vw, 1.72rem);
+  line-height: 1.12;
+  color: #273933;
 }
 
 .whiteboard-breathing-hint {
   margin: 0;
   font-size: 0.88rem;
-  color: #5a645f;
-  animation: breath-glow 1900ms ease-in-out infinite;
+  color: #4f6058;
+  font-weight: 500;
+  text-align: center;
+  max-width: 260px;
+  opacity: 0.88;
+  animation-name: breath-glow-soft;
+  animation-duration: 2200ms;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: 3;
+  animation-fill-mode: forwards;
 }
 
 .whiteboard-drawer {
@@ -1149,30 +1183,39 @@ button:focus {
 @keyframes whiteboard-ink-float {
   0% {
     transform: translateY(0) scale(1);
-    filter: saturate(0.95);
+    filter: saturate(0.93);
   }
   50% {
     transform: translateY(-2px) scale(1.01);
-    filter: saturate(1.05);
+    filter: saturate(1.06);
   }
   100% {
     transform: translateY(0) scale(1);
-    filter: saturate(0.95);
+    filter: saturate(0.94);
   }
 }
 
-@keyframes breath-glow {
+@keyframes breath-glow-soft {
   0% {
-    opacity: 0.45;
+    opacity: 0.72;
+    color: #67766f;
     text-shadow: 0 0 0 rgba(31, 80, 62, 0);
   }
   50% {
-    opacity: 1;
-    text-shadow: 0 0 12px rgba(31, 80, 62, 0.25);
+    opacity: 0.97;
+    color: #315a4d;
+    text-shadow: 0 0 10px rgba(28, 90, 70, 0.24);
   }
   100% {
-    opacity: 0.45;
+    opacity: 0.9;
+    color: #54665d;
     text-shadow: 0 0 0 rgba(31, 80, 62, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .whiteboard-breathing-hint {
+    animation: none;
   }
 }
 
@@ -1268,6 +1311,19 @@ button:focus {
 
   .word-card-flip {
     height: 168px;
+  }
+
+  .word-card-face-back .whiteboard-ink-card {
+    width: min(200px, 86%);
+    height: 80px;
+  }
+
+  .whiteboard-title {
+    font-size: clamp(1.05rem, 5.5vw, 1.36rem);
+  }
+
+  .whiteboard-breathing-hint {
+    font-size: 0.82rem;
   }
 
   .word-card-lobby-text {

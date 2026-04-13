@@ -953,11 +953,11 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                     </div>
                     <div className="word-card-face word-card-face-back">
                       {isCurrentPlayerWhiteboard ? (
-                        <>
+                        <div className="whiteboard-face-content">
                           <div className="whiteboard-ink-card" aria-hidden="true" />
-                          <strong>你是白板</strong>
+                          <strong className="whiteboard-title">你是白板</strong>
                           <p className="whiteboard-breathing-hint">你没有词，请根据他人描述盲猜。</p>
-                        </>
+                        </div>
                       ) : (
                         <strong>{currentPlayer.current_word ?? "暂未发词"}</strong>
                       )}
