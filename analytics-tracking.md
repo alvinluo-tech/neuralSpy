@@ -61,19 +61,94 @@
   - status
   - category
 
-### 3.5 Grok_API_Success
+### 3.5 AI_Word_Generation_Attempt（含按模型命名）
 
-- 调用位置：src/hooks/useRoomLogic.ts（startRound -> 调用 /api/grok/words 成功后）
-- 触发时机：每次 Grok 接口返回成功且拿到词对时
+- 调用位置：src/hooks/useRoomLogic.ts（startRound -> 每次请求返回后）
+- 触发时机：每次 AI 请求尝试时（无论后续成功或失败）
 - 上报字段：
+  - room_id
+  - round_number
   - category
   - attempt
   - is_random_all_mode
+  - provider
+  - model
+
+事件名：
+
+- 按模型事件：`AIWG_Attempt_{provider}_{model}`
 
 说明：
-- 当前逻辑会按成功调用次数上报，用于估算 AI 侧调用频率和成本。
+- model 字段优先使用服务端返回的最终模型（即实际调用模型）。
+- 当前前端在未手选模型时会显式使用 `qwen/qwen3-32b` 发起请求，避免出现默认占位后缀。
+- 若未能解析到模型名，不会发送按模型 attempt 事件，避免占位后缀污染统计。
+- 用于分析各模型请求量、重试分布与每次 attempt 的趋势。
 
-### 3.6 Room_Config
+### 3.6 AI_Word_Generation_Success（含按模型命名）
+
+- 调用位置：src/hooks/useRoomLogic.ts（startRound -> 调用 /api/grok/words 成功后）
+- 触发时机：每次 AI 接口返回成功且拿到词对时
+- 上报字段：
+  - room_id
+  - round_number
+  - category
+  - attempt
+  - is_random_all_mode
+  - provider
+  - model
+
+事件名：
+
+- 通用事件：`AI_Word_Generation_Success`
+- 按模型事件：`AIWG_Success_{provider}_{model}`
+
+示例：
+
+- `AIWG_Success_groq_llama_3_1_8b_instant`
+
+说明：
+- 当前逻辑会按成功调用次数上报，可用于对比不同模型的成功率与稳定性。
+- 由于 Umami 事件名长度限制，极长的 `provider + model` 组合仍可能被归一化为“截断前缀 + 哈希后缀”。
+
+### 3.7 AI_Word_Generation_Failure（含按模型命名）
+
+- 调用位置：src/hooks/useRoomLogic.ts（startRound -> 调用 /api/grok/words 失败后）
+- 触发时机：接口失败、或响应缺少可用词对
+- 上报字段：
+  - room_id
+  - round_number
+  - category
+  - attempt
+  - is_random_all_mode
+  - provider
+  - model
+  - failure_stage（network_error / http_error / invalid_payload / history_insert_error / exhausted_pairs）
+  - http_status
+  - error
+
+事件名：
+
+- 按模型事件：`AIWG_Failure_{provider}_{model}`
+
+### 3.8 AI_Word_Generation_Rejected_Duplicate（含按模型命名）
+
+- 调用位置：src/hooks/useRoomLogic.ts（startRound -> 成功拿到词对但因去重被跳过时）
+- 触发时机：词对命中当前局历史（内存命中）或写入历史唯一键冲突
+- 上报字段：
+  - room_id
+  - round_number
+  - category
+  - attempt
+  - is_random_all_mode
+  - provider
+  - model
+  - reason（memory_hit / history_unique_conflict）
+
+事件名：
+
+- 按模型事件：`AIWG_RejDup_{provider}_{model}`
+
+### 3.9 Room_Config
 
 - 调用位置：src/hooks/useRoomLogic.ts（startRound 成功后）
 - 触发时机：开局完成并发词后
@@ -85,7 +160,7 @@
   - undercover_count
   - category
 
-### 3.7 game_result_detail
+### 3.10 game_result_detail
 
 - 调用位置：src/components/RoomGame.tsx（结果页逻辑）
 - 触发时机：结算页加载且房间状态为 finished 时
@@ -114,7 +189,11 @@
 - room_created
 - room_joined
 - room_status_change
-- Grok_API_Success
+- AIWG_Attempt_{provider}_{model}
+- AI_Word_Generation_Success
+- AIWG_Success_{provider}_{model}
+- AIWG_Failure_{provider}_{model}
+- AIWG_RejDup_{provider}_{model}
 - Room_Config
 - game_result_detail
 

@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "谁是卧底组局工具",
-  description: "支持人数配置、词库管理与 Grok 词条生成的谁是卧底 Web 应用",
+  description: "支持人数配置、词库管理与 Groq 词条生成的谁是卧底 Web 应用",
 };
 
 export default function RootLayout({

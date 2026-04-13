@@ -28,13 +28,37 @@ cp .env.example .env.local
 然后在 `.env.local` 中填写：
 
 ```bash
-GROK_API_KEY=your_grok_api_key
-GROK_API_URL=https://api.x.ai/v1/chat/completions
-GROK_MODEL=grok-4-1-fast
+GROQ_API_KEY=your_groq_api_key
+GROQ_API_URL=https://api.groq.com/openai/v1/chat/completions
+GROQ_MODEL=qwen/qwen3-32b
 NEXT_PUBLIC_SUPABASE_URL=https://your-project-ref.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 ```
+
+说明：
+
+- 当前仅支持 Groq。
+- 若请求体传入 `model`，会覆盖默认配置。
+- 默认模型建议为 `qwen/qwen3-32b`。
+
+推荐模型优先级（Groq）：
+
+- P0（首选）：`qwen/qwen3-32b`
+	- 推荐理由：中文理解更细腻，词对更地道。
+	- 适用场景：默认生成引擎。
+- P1（备选）：`moonshotai/kimi-k2-instruct`
+	- 推荐理由：中文语义细节表现强。
+	- 适用场景：高难度模式 / 文学分类。
+- P2（平衡）：`meta-llama/llama-4-scout-17b-16e-instruct`
+	- 推荐理由：兼顾速度与质量。
+	- 适用场景：通用词组生成。
+- P3（强力）：`llama-3.3-70b-versatile`
+	- 推荐理由：复杂主题与推理更稳定。
+	- 适用场景：复杂主题 / 逻辑校验。
+- P4（极速）：`llama-3.1-8b-instant`
+	- 推荐理由：延迟低，响应快。
+	- 适用场景：简单 / 新手模式。
 
 3. 启动开发服务器
 
@@ -211,14 +235,15 @@ select count(*) as subcategory_count from public.category_subcategories;
 
 预期结果：`category_count = 10`，`subcategory_count = 100`。
 
-## Grok API 说明
+## 词条生成 API 说明（Groq）
 
 - 前端调用 `POST /api/grok/words`
-- 服务端使用 `GROK_API_KEY` 调用 Grok 生成单组词条
+- 服务端仅使用 Groq（OpenAI 兼容 Chat Completions）
+- 若请求体传入 `model`，会覆盖默认值
 - 返回结构：`{ pair: { civilian, undercover } }`
 - 每次房主点击“开始本局”只会调用一次 AI
 
-如果未配置密钥，会在前端提示配置环境变量。
+如果未配置 Groq 密钥，会在前端提示配置环境变量。
 
 ## 服务端自动结算说明
 
@@ -274,9 +299,9 @@ trackEvent("room_status_change", {
 2. 在 Vercel 导入该仓库
 3. 在 Vercel 项目设置中添加环境变量：
 
-- `GROK_API_KEY`（必填）
-- `GROK_API_URL`（可选）
-- `GROK_MODEL`（可选）
+- `GROQ_API_KEY`（必填）
+- `GROQ_API_URL`（可选）
+- `GROQ_MODEL`（可选）
 - `NEXT_PUBLIC_SUPABASE_URL`（必填）
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`（必填）
 - `SUPABASE_SERVICE_ROLE_KEY`（必填，仅服务端使用，不可暴露到前端）

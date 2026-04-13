@@ -24,9 +24,6 @@ const SESSION_KEY = "undercover.session.id";
 const randomSessionId = () => {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 };
-const clamp = (value: number, min: number, max: number) => {
-  return Math.min(Math.max(value, min), max);
-};
 
 const resolveWinnerRole = (players: Array<{ is_alive: boolean; is_undercover: boolean }>) => {
   const aliveUndercover = players.filter((player) => player.is_alive && player.is_undercover).length;
@@ -42,17 +39,66 @@ type RoomGameProps = {
   pageType: "lobby" | "play" | "result";
 };
 
+type GroqModelProfile = {
+  priority: "P0" | "P1" | "P2" | "P3" | "P4";
+  value: string;
+  label: string;
+  reason: string;
+  scenario: string;
+};
+
+const GROQ_MODEL_PROFILES: GroqModelProfile[] = [
+  {
+    priority: "P0",
+    value: "qwen/qwen3-32b",
+    label: "qwen/qwen3-32b",
+    reason: "中文理解能力强，语义细腻。",
+    scenario: "默认生成引擎",
+  },
+  {
+    priority: "P1",
+    value: "moonshotai/kimi-k2-instruct",
+    label: "moonshotai/kimi-k2-instruct",
+    reason: "擅长中文细微差别与语感。",
+    scenario: "高难度模式 / 文学分类",
+  },
+  {
+    priority: "P2",
+    value: "meta-llama/llama-4-scout-17b-16e-instruct",
+    label: "meta-llama/llama-4-scout-17b-16e-instruct",
+    reason: "兼顾速度与逻辑质量。",
+    scenario: "通用词组生成",
+  },
+  {
+    priority: "P3",
+    value: "llama-3.3-70b-versatile",
+    label: "llama-3.3-70b-versatile",
+    reason: "复杂主题与推理能力强。",
+    scenario: "复杂主题 / 逻辑校验",
+  },
+  {
+    priority: "P4",
+    value: "llama-3.1-8b-instant",
+    label: "llama-3.1-8b-instant",
+    reason: "响应速度快，适合轻量场景。",
+    scenario: "简单 / 新手模式",
+  },
+];
+
+const DEFAULT_GROQ_MODEL = GROQ_MODEL_PROFILES[0].value;
+const AUTO_MODEL_VALUE = "__AUTO_RECOMMENDED_MODEL__";
+
 export function RoomGame({ roomId, pageType }: RoomGameProps) {
   const router = useRouter();
 
   const [sessionId, setSessionId] = useState("");
   const [wordVisible, setWordVisible] = useState(false);
   const [voteTargetId, setVoteTargetId] = useState<string>("");
-  const [editableCategory, setEditableCategory] = useState<string | null>(null);
-  const [editableVoteDurationSeconds, setEditableVoteDurationSeconds] = useState<number | null>(null);
+  const [roomCategoryDraftValue, setRoomCategoryDraftValue] = useState<string | null>(null);
+  const [voteDurationDraftInputValue, setVoteDurationDraftInputValue] = useState<string | null>(null);
   const [nowMs, setNowMs] = useState(0);
   const [roomCategorySearchOpen, setRoomCategorySearchOpen] = useState(false);
-  const [roomCategorySearchQuery, setRoomCategorySearchQuery] = useState<string | null>(null);
+  const [selectedAiModel, setSelectedAiModel] = useState(AUTO_MODEL_VALUE);
   const [showSyncToast, setShowSyncToast] = useState(false);
 
   const { room, players, votes, loading: roomLoading, syncing: roomSyncing, error: roomError, loadRoomData } =
@@ -147,10 +193,24 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
           const rotation = room ? Math.max(room.round_number - 1, 0) % sorted.length : 0;
           return [...sorted.slice(rotation), ...sorted.slice(0, rotation)];
         })();
-  const roomCategoryInputValue = roomCategorySearchQuery ?? room?.category ?? "";
-  const editableCategoryValue = editableCategory ?? room?.category ?? "";
-  const editableVoteDurationValue = editableVoteDurationSeconds ?? room?.vote_duration_seconds ?? 60;
+  const currentRoomCategory = room?.category ?? "";
+  const currentVoteDuration = room?.vote_duration_seconds ?? 60;
+  const roomCategoryInputValue = roomCategoryDraftValue ?? currentRoomCategory;
+  const trimmedCategoryDraft = roomCategoryInputValue.trim();
+  const categoryDirty = trimmedCategoryDraft !== currentRoomCategory.trim();
+  const voteDurationInputValue = voteDurationDraftInputValue ?? String(currentVoteDuration);
+  const parsedVoteDuration = Number(voteDurationInputValue);
+  const voteDurationDraft =
+    voteDurationInputValue.trim().length > 0 && Number.isFinite(parsedVoteDuration) && parsedVoteDuration >= 0
+      ? Math.max(0, Math.trunc(parsedVoteDuration))
+      : null;
+  const voteDurationDirty =
+    voteDurationDraftInputValue !== null &&
+    (voteDurationDraft == null || voteDurationDraft !== currentVoteDuration);
   const roomCategorySuggestions = buildCategorySuggestions(roomCategoryInputValue);
+  const aiModelOptions = GROQ_MODEL_PROFILES;
+  const effectiveModel = selectedAiModel === AUTO_MODEL_VALUE ? DEFAULT_GROQ_MODEL : selectedAiModel || DEFAULT_GROQ_MODEL;
+  const selectedModelProfile = GROQ_MODEL_PROFILES.find((item) => item.value === effectiveModel) ?? GROQ_MODEL_PROFILES[0];
   const forcedExitNotice =
     room && sessionId && players.length > 0 && !players.some((player) => player.session_id === sessionId)
       ? "你已被房主移出房间，正在返回大厅。"
@@ -347,8 +407,8 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                     type="text"
                     value={roomCategoryInputValue}
                     onChange={(event) => {
-                      setRoomCategorySearchQuery(event.target.value);
-                      setEditableCategory(event.target.value);
+                      const nextValue = event.target.value;
+                      setRoomCategoryDraftValue(nextValue);
                     }}
                     onFocus={() => setRoomCategorySearchOpen(true)}
                     placeholder="搜索并修改房间类别"
@@ -356,8 +416,18 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   <button
                     type="button"
                     className="btn ghost"
-                    onClick={() => roomLogic.updateRoomCategory(roomId, editableCategoryValue)}
-                    disabled={roomLogic.busy}
+                    onClick={async () => {
+                      if (!trimmedCategoryDraft) {
+                        roomLogic.setError("类别不能为空。");
+                        return;
+                      }
+                      const ok = await roomLogic.updateRoomCategory(roomId, trimmedCategoryDraft);
+                      if (ok) {
+                        setRoomCategoryDraftValue(null);
+                        setRoomCategorySearchOpen(false);
+                      }
+                    }}
+                    disabled={roomLogic.busy || !categoryDirty || !trimmedCategoryDraft}
                   >
                     保存类别
                   </button>
@@ -401,12 +471,12 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                           padding: "8px 12px",
                           border: "none",
                           borderBottom: "1px solid #eee",
-                          backgroundColor: editableCategoryValue === item.subcategoryDisplayName ? "#e8f4f8" : "#fff",
+                          backgroundColor: trimmedCategoryDraft === item.subcategoryDisplayName ? "#e8f4f8" : "#fff",
                           cursor: "pointer",
                         }}
                         onClick={() => {
-                          setEditableCategory(item.subcategoryDisplayName);
-                          setRoomCategorySearchQuery(item.subcategoryDisplayName);
+                          const nextCategory = item.subcategoryDisplayName;
+                          setRoomCategoryDraftValue(nextCategory);
                           setRoomCategorySearchOpen(false);
                         }}
                       >
@@ -433,8 +503,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                         }}
                         onClick={() => {
                           const custom = roomCategoryInputValue.trim();
-                          setEditableCategory(custom);
-                          setRoomCategorySearchQuery(custom);
+                          setRoomCategoryDraftValue(custom);
                           setRoomCategorySearchOpen(false);
                         }}
                       >
@@ -449,18 +518,30 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
             {isHost && (
               <div className="inline-row room-category-editor">
                 <input
-                  type="number"
-                  min={15}
-                  max={600}
-                  value={editableVoteDurationValue}
-                  onChange={(event) => setEditableVoteDurationSeconds(clamp(Number(event.target.value) || 15, 15, 600))}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={voteDurationInputValue}
+                  onChange={(event) => {
+                    const nextValue = event.target.value.replace(/[^\d]/g, "");
+                    setVoteDurationDraftInputValue(nextValue);
+                  }}
                   placeholder="投票时长（秒）"
                 />
                 <button
                   type="button"
                   className="btn ghost"
-                  onClick={() => roomLogic.updateVoteDuration(roomId, editableVoteDurationValue)}
-                  disabled={roomLogic.busy}
+                  onClick={async () => {
+                    if (voteDurationDraft == null) {
+                      roomLogic.setError("请输入大于等于 0 秒的投票时长。");
+                      return;
+                    }
+                    const ok = await roomLogic.updateVoteDuration(roomId, voteDurationDraft);
+                    if (ok) {
+                      setVoteDurationDraftInputValue(null);
+                    }
+                  }}
+                  disabled={roomLogic.busy || !voteDurationDirty || voteDurationDraft == null}
                 >
                   保存投票时长
                 </button>
@@ -503,11 +584,37 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
             {isHost && (
               <div className="host-actions">
                 <h3>房主操作</h3>
+                <div className="inline-row room-category-editor">
+                  <label style={{ flex: 1 }}>
+                    AI 模型策略
+                    <select
+                      value={selectedAiModel}
+                      onChange={(event) => setSelectedAiModel(event.target.value)}
+                      disabled={roomLogic.busy || room.status === "voting"}
+                    >
+                      <option value={AUTO_MODEL_VALUE}>智能推荐（默认）· P0 · {DEFAULT_GROQ_MODEL}</option>
+                      {aiModelOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {`${option.priority} · ${option.label}（手动指定）`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <p className="hint">
+                  当前实际调用模型：{selectedModelProfile.label}（{selectedModelProfile.priority}） · {selectedModelProfile.reason}
+                </p>
+                <p className="hint">适用场景：{selectedModelProfile.scenario}</p>
                 <div className="actions-row">
                   <button
                     type="button"
                     className="btn primary"
-                    onClick={() => roomLogic.startRound(roomId, room.category, room.undercover_count, categories)}
+                    onClick={() =>
+                      roomLogic.startRound(roomId, room.category, room.undercover_count, categories, {
+                        provider: "groq",
+                        model: effectiveModel,
+                      })
+                    }
                     disabled={roomLogic.busy || room.status === "voting"}
                   >
                     {room.round_number === 0 ? "开始本局（AI 生成 1 组词）" : "重开新局（重新生成 1 组词）"}

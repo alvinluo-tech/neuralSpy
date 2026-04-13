@@ -33,6 +33,16 @@ type GeneratedWordPair = {
   undercover: string;
 };
 
+type AiProvider = "groq";
+const DEFAULT_GROQ_MODEL = "qwen/qwen3-32b";
+
+type AiFailureStage =
+  | "network_error"
+  | "http_error"
+  | "invalid_payload"
+  | "history_insert_error"
+  | "exhausted_pairs";
+
 const secureRandomInt = (maxExclusive: number) => {
   if (maxExclusive <= 1) return 0;
   const cryptoApi = globalThis.crypto;
@@ -52,6 +62,12 @@ const secureRandomInt = (maxExclusive: number) => {
 
 const clamp = (value: number, min: number, max: number) => {
   return Math.min(Math.max(value, min), max);
+};
+
+const normalizeVoteDurationSeconds = (value: number | null | undefined) => {
+  if (!Number.isFinite(value)) return 60;
+  const normalized = Math.trunc(value);
+  return normalized >= 0 ? normalized : 0;
 };
 
 const undercoverKey = (ids: string[]) => {
@@ -96,6 +112,50 @@ const normalizePairKey = (pair: { civilian: string; undercover: string }) => {
   const left = pair.civilian.trim().toLowerCase();
   const right = pair.undercover.trim().toLowerCase();
   return [left, right].sort().join("||");
+};
+
+const MODEL_EVENT_PREFIX_ALIASES: Record<string, string> = {
+  AI_Word_Generation_Attempt: "AIWG_Attempt",
+  AI_Word_Generation_Success: "AIWG_Success",
+  AI_Word_Generation_Failure: "AIWG_Failure",
+  AI_Word_Generation_Rejected_Duplicate: "AIWG_RejDup",
+};
+
+const toEventToken = (value: string | undefined, fallback: string) => {
+  const normalized = (value ?? "").trim().toLowerCase();
+  if (!normalized) return fallback;
+  const token = normalized.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return token || fallback;
+};
+
+const toModelEventToken = (model: string | undefined) => {
+  const normalized = (model ?? "").trim().toLowerCase();
+  if (!normalized) return "unk";
+
+  return toEventToken(normalized, "unk");
+};
+
+const trackAiEvent = (
+  baseEventName: string,
+  payload: Record<string, string | number | boolean | null | undefined>,
+  provider: string | undefined,
+  model: string | undefined,
+  options?: {
+    emitBaseEvent?: boolean;
+  },
+) => {
+  const emitBaseEvent = options?.emitBaseEvent ?? false;
+  if (emitBaseEvent) {
+    trackEvent(baseEventName, payload);
+  }
+
+  const resolvedModel = model?.trim() || DEFAULT_GROQ_MODEL;
+
+  const providerToken = toEventToken(provider, "groq");
+  const modelToken = toModelEventToken(resolvedModel);
+  const modelEventPrefix = MODEL_EVENT_PREFIX_ALIASES[baseEventName] ?? baseEventName;
+
+  trackEvent(`${modelEventPrefix}_${providerToken}_${modelToken}`, payload);
 };
 
 export const useRoomLogic = (
@@ -150,7 +210,11 @@ export const useRoomLogic = (
       roomId: string,
       category: string,
       undercoverCount: number,
-      allCategories: Category[]
+      allCategories: Category[],
+      aiOptions?: {
+        provider?: AiProvider;
+        model?: string;
+      }
     ): Promise<{ success: boolean; message: string }> => {
       if (!room || !isHost) {
         setError("仅房主可开局。");
@@ -204,30 +268,144 @@ export const useRoomLogic = (
         const excludedPairs = historyRows.map((row) => `${row.civilian}/${row.undercover}`);
 
         let acceptedPair: { civilian: string; undercover: string } | null = null;
+        let lastAttemptProvider = "groq";
+        let lastAttemptModel = DEFAULT_GROQ_MODEL;
 
         for (let attempt = 0; attempt < 6; attempt += 1) {
-          const response = await fetch("/api/grok/words", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              category: pickedCategory,
-              excludedPairs,
-            }),
-          });
+          const requestBody: {
+            category: string;
+            excludedPairs: string[];
+            provider?: AiProvider;
+            model?: string;
+            tracking?: {
+              room_id: string;
+              round_number: number;
+              attempt: number;
+              is_random_all_mode: boolean;
+              category: string;
+              provider: string;
+              model: string | undefined;
+            };
+          } = {
+            category: pickedCategory,
+            excludedPairs,
+          };
 
-          const data = (await response.json()) as { pair?: GeneratedWordPair; error?: string };
-          if (!response.ok || !data.pair) {
-            throw new Error(data.error ?? "AI 词条生成失败");
+          if (aiOptions?.provider) {
+            requestBody.provider = aiOptions.provider;
           }
 
-          trackEvent("Grok_API_Success", {
+          const requestedModel = aiOptions?.model?.trim();
+          requestBody.model = requestedModel && requestedModel.length > 0
+            ? requestedModel
+            : DEFAULT_GROQ_MODEL;
+
+          const requestProviderName = requestBody.provider ?? "groq";
+          const requestModelName = requestBody.model;
+          lastAttemptProvider = requestProviderName;
+          lastAttemptModel = requestModelName;
+
+          const trackingBasePayload = {
+            room_id: roomId,
+            round_number: room.round_number + 1,
             category: pickedCategory,
             attempt: attempt + 1,
             is_random_all_mode: isRandomAllMode,
-          });
+            provider: requestProviderName,
+            model: requestModelName,
+          };
+
+          requestBody.tracking = trackingBasePayload;
+
+          trackAiEvent(
+            "AI_Word_Generation_Attempt",
+            trackingBasePayload,
+            requestProviderName,
+            requestModelName,
+            { emitBaseEvent: false },
+          );
+
+          let response: Response;
+          try {
+            response = await fetch("/api/grok/words", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(requestBody),
+            });
+          } catch (networkErr) {
+            const networkErrorMessage =
+              networkErr instanceof Error ? networkErr.message : "网络请求失败";
+            trackAiEvent(
+              "AI_Word_Generation_Failure",
+              {
+                ...trackingBasePayload,
+                failure_stage: "network_error" as AiFailureStage,
+                http_status: 0,
+                error: networkErrorMessage,
+              },
+              requestProviderName,
+              requestModelName,
+            );
+            throw new Error(networkErrorMessage);
+          }
+
+          let data: {
+            pair?: GeneratedWordPair;
+            error?: string;
+            provider?: string;
+            model?: string;
+          } = {};
+
+          try {
+            data = (await response.json()) as {
+              pair?: GeneratedWordPair;
+              error?: string;
+              provider?: string;
+              model?: string;
+            };
+          } catch {
+            data = {
+              error: `AI 响应解析失败（HTTP ${response.status}）`,
+            };
+          }
+
+          const providerName = data.provider ?? requestProviderName;
+          const modelName = data.model ?? requestBody.model;
+          lastAttemptProvider = providerName;
+          lastAttemptModel = modelName ?? lastAttemptModel;
+
+          if (!response.ok || !data.pair) {
+            const failureError = data.error ?? `AI 词条生成失败（HTTP ${response.status}）`;
+            const failureStage: AiFailureStage = !response.ok ? "http_error" : "invalid_payload";
+            trackAiEvent(
+              "AI_Word_Generation_Failure",
+              {
+                ...trackingBasePayload,
+                provider: providerName,
+                model: modelName,
+                failure_stage: failureStage,
+                http_status: response.status,
+                error: failureError,
+              },
+              providerName,
+              modelName,
+            );
+            throw new Error(failureError);
+          }
 
           const pairKey = normalizePairKey(data.pair);
           if (usedKeys.has(pairKey)) {
+            trackAiEvent(
+              "AI_Word_Generation_Rejected_Duplicate",
+              {
+                ...trackingBasePayload,
+                provider: providerName,
+                model: modelName,
+                reason: "memory_hit",
+              },
+              providerName,
+              modelName,
+            );
             continue;
           }
 
@@ -242,9 +420,33 @@ export const useRoomLogic = (
 
           if (insertHistory.error) {
             if (insertHistory.error.code === "23505") {
+              trackAiEvent(
+                "AI_Word_Generation_Rejected_Duplicate",
+                {
+                  ...trackingBasePayload,
+                  provider: providerName,
+                  model: modelName,
+                  reason: "history_unique_conflict",
+                },
+                providerName,
+                modelName,
+              );
               usedKeys.add(pairKey);
               continue;
             }
+            trackAiEvent(
+              "AI_Word_Generation_Failure",
+              {
+                ...trackingBasePayload,
+                provider: providerName,
+                model: modelName,
+                failure_stage: "history_insert_error" as AiFailureStage,
+                http_status: 0,
+                error: insertHistory.error.message,
+              },
+              providerName,
+              modelName,
+            );
             throw new Error(insertHistory.error.message);
           }
 
@@ -253,6 +455,23 @@ export const useRoomLogic = (
         }
 
         if (!acceptedPair) {
+          trackAiEvent(
+            "AI_Word_Generation_Failure",
+            {
+              room_id: roomId,
+              round_number: room.round_number + 1,
+              category: pickedCategory,
+              attempt: 6,
+              is_random_all_mode: isRandomAllMode,
+              provider: lastAttemptProvider,
+              model: lastAttemptModel,
+              failure_stage: "exhausted_pairs" as AiFailureStage,
+              http_status: 0,
+              error: "该类别可用词组已耗尽，请修改类别后再开局。",
+            },
+            lastAttemptProvider,
+            lastAttemptModel,
+          );
           throw new Error("该类别可用词组已耗尽，请修改类别后再开局。");
         }
 
@@ -333,7 +552,7 @@ export const useRoomLogic = (
       setError("");
 
       const now = new Date();
-      const duration = clamp(room.vote_duration_seconds ?? 60, 15, 600);
+      const duration = normalizeVoteDurationSeconds(room.vote_duration_seconds);
       const deadline = new Date(now.getTime() + duration * 1000).toISOString();
 
       const update = await supabase
@@ -620,7 +839,17 @@ export const useRoomLogic = (
     async (roomId: string, seconds: number): Promise<boolean> => {
       if (!room || !isHost) return false;
 
-      const duration = clamp(seconds, 15, 600);
+      if (!Number.isFinite(seconds)) {
+        setError("投票时长格式无效。");
+        return false;
+      }
+
+      const duration = Math.trunc(seconds);
+      if (duration < 0) {
+        setError("投票时长必须大于等于 0 秒。");
+        return false;
+      }
+
       setBusy(true);
       setError("");
 

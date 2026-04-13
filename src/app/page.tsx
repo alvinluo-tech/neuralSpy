@@ -21,6 +21,12 @@ const clamp = (value: number, min: number, max: number) => {
   return Math.min(Math.max(value, min), max);
 };
 
+const normalizeVoteDurationSeconds = (value: number) => {
+  if (!Number.isFinite(value)) return 60;
+  const normalized = Math.trunc(value);
+  return normalized >= 0 ? normalized : 0;
+};
+
 type EntryMode = "create" | "join";
 
 export default function HomePage() {
@@ -106,7 +112,7 @@ export default function HomePage() {
             vote_enabled: createVoteEnabled,
             round_number: 0,
             vote_round: 1,
-            vote_duration_seconds: clamp(createVoteDurationSeconds, 15, 600),
+            vote_duration_seconds: normalizeVoteDurationSeconds(createVoteDurationSeconds),
             vote_started_at: null,
             vote_deadline_at: null,
             vote_candidate_ids: null,
@@ -435,10 +441,9 @@ export default function HomePage() {
                 每轮投票限时（秒）
                 <input
                   type="number"
-                  min={15}
-                  max={600}
+                  min={0}
                   value={createVoteDurationSeconds}
-                  onChange={(event) => setCreateVoteDurationSeconds(clamp(Number(event.target.value) || 15, 15, 600))}
+                  onChange={(event) => setCreateVoteDurationSeconds(normalizeVoteDurationSeconds(Number(event.target.value)))}
                 />
               </label>
               <label className="check-line">
