@@ -350,6 +350,24 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   ).size;
   const votedPlayerIds = new Set(currentRoundVotes.map((vote) => vote.voter_player_id));
   const canCurrentPlayerVote = !!currentPlayer?.is_alive && eligibleVoters.some((player) => player.id === currentPlayer.id);
+  const voteCandidateOptions = [
+    ...voteScopePlayers
+      .filter((player) => player.id !== currentPlayer?.id)
+      .map((player) => ({
+        key: player.id,
+        value: player.id,
+        title: `玩家 ${player.seat_no}`,
+        meta: player.name,
+        isAbstain: false,
+      })),
+    {
+      key: ABSTAIN_VOTE_VALUE,
+      value: ABSTAIN_VOTE_VALUE,
+      title: "弃票",
+      meta: "本轮不投任何人",
+      isAbstain: true,
+    },
+  ];
   const hasVoteSelection = voteTargetId.trim().length > 0;
   const canSubmitVote = canCurrentPlayerVote && hasVoteSelection;
   const voteInlineStatus = roomSyncing
@@ -361,6 +379,100 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
         : !canCurrentPlayerVote
           ? "你当前轮次不可投票，请等待下一轮或结算。"
           : null;
+  const voteWindowOpen = room?.status === "voting";
+  const voteExpired =
+    voteWindowOpen && normalizedVoteDeadlineMs != null ? nowMs >= normalizedVoteDeadlineMs : false;
+  const allEligibleVoted = eligibleVoters.length > 0 && votedCount >= eligibleVoters.length;
+  const voteSettlementReady = voteWindowOpen && (allEligibleVoted || voteExpired);
+  const wordsGenerating = roomLogic.generatingWords || room?.result_summary === AI_GENERATING_SUMMARY;
+
+  type HostControlPhase =
+    | "lobby-ready"
+    | "dealing-words"
+    | "discussion"
+    | "vote-collecting"
+    | "vote-ready"
+    | "finished";
+
+  type HostControlStep = "setup" | "discussion" | "voting" | "settle";
+
+  const hostControlPhase: HostControlPhase =
+    room?.status === "finished"
+      ? "finished"
+      : room?.status === "voting"
+        ? voteSettlementReady
+          ? "vote-ready"
+          : "vote-collecting"
+        : room?.status === "playing"
+          ? wordsGenerating
+            ? "dealing-words"
+            : "discussion"
+          : wordsGenerating
+            ? "dealing-words"
+            : "lobby-ready";
+
+  const hostControlPhaseMeta: Record<
+    HostControlPhase,
+    { label: string; hint: string; progress: number; step: HostControlStep; tone: HostControlStep | "finished" }
+  > = {
+    "lobby-ready": {
+      label: "待开局",
+      hint: "确认规则后开始本局。",
+      progress: 16,
+      step: "setup",
+      tone: "setup",
+    },
+    "dealing-words": {
+      label: "发词准备中",
+      hint: "AI 正在生成并分发词条。",
+      progress: 28,
+      step: "setup",
+      tone: "setup",
+    },
+    discussion: {
+      label: "讨论发言中",
+      hint: "组织发言，准备开启投票。",
+      progress: 46,
+      step: "discussion",
+      tone: "discussion",
+    },
+    "vote-collecting": {
+      label: "投票收集中",
+      hint: `已投 ${votedCount}/${eligibleVoters.length}，可等待全员投完或倒计时结束。`,
+      progress: 72,
+      step: "voting",
+      tone: "voting",
+    },
+    "vote-ready": {
+      label: "待公布结果",
+      hint: "已满足结算条件，可立即公布结果。",
+      progress: 90,
+      step: "settle",
+      tone: "settle",
+    },
+    finished: {
+      label: "对局已结束",
+      hint: "可以直接重开新局。",
+      progress: 100,
+      step: "settle",
+      tone: "finished",
+    },
+  };
+
+  const hostControlStepLabels: Array<{ key: HostControlStep; label: string }> = [
+    { key: "setup", label: "准备" },
+    { key: "discussion", label: "讨论" },
+    { key: "voting", label: "投票" },
+    { key: "settle", label: "公布" },
+  ];
+
+  const hostControlStepIndex: Record<HostControlStep, number> = {
+    setup: 0,
+    discussion: 1,
+    voting: 2,
+    settle: 3,
+  };
+  const hostControlCurrentStepIndex = hostControlStepIndex[hostControlPhaseMeta[hostControlPhase].step];
   const tieCandidatePlayers =
     voteCandidateIds.length === 0
       ? []
@@ -498,8 +610,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   const undercoverSaveResetTimerRef = useRef<number | null>(null);
   const voteDurationSaveResetTimerRef = useRef<number | null>(null);
   const gameResultTrackedKeyRef = useRef<string | null>(null);
-  const isGeneratingOverlayVisible =
-    roomLogic.generatingWords || room?.result_summary === AI_GENERATING_SUMMARY;
+  const isGeneratingOverlayVisible = wordsGenerating;
 
   useEffect(() => {
     if (!room || pageType !== "result" || room.status !== "finished" || !isHost) return;
@@ -605,8 +716,8 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
 
   return (
     <div className="page-shell">
-      <main className="app-wrap">
-        <section className="hero-card">
+      <main className="app-wrap aceternity-stage">
+        <section className="hero-card hero-card--lift acet-spotlight">
           <p className="eyebrow">游戏房间 {room.code}</p>
           <h1 className="hero-title">谁是卧底多人房间</h1>
           <p className="hero-subtitle">
@@ -650,7 +761,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
             <p className="hint">每轮限时：{room.vote_duration_seconds ?? 60} 秒</p>
 
             {canEditRoomConfig && (
-              <div className="host-panel-switch" role="tablist" aria-label="房主操作分区">
+              <div className="host-panel-switch acet-pill-tabs" role="tablist" aria-label="房主操作分区">
                 <Button
                   type="button"
                   variant={showHostControlPanel ? "primary" : "secondary"}
@@ -959,13 +1070,42 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
             </div>
 
             {isHost && showHostControlPanel && (
-              <div className="host-actions">
+              <div className="host-actions acet-card-lift">
                 <h3>本局控制</h3>
+                <div className="host-control-progress" aria-label="本局状态进度">
+                  <div className="host-control-progress-head">
+                    <span>当前状态</span>
+                    <strong>{hostControlPhaseMeta[hostControlPhase].label}</strong>
+                  </div>
+                  <div className="host-control-track" aria-hidden="true">
+                    <div
+                      className={`host-control-fill ${hostControlPhaseMeta[hostControlPhase].tone}`}
+                      style={{ width: `${hostControlPhaseMeta[hostControlPhase].progress}%` }}
+                    />
+                  </div>
+                  <p className="host-control-progress-hint">{hostControlPhaseMeta[hostControlPhase].hint}</p>
+                  <div className="host-control-steps" aria-hidden="true">
+                    {hostControlStepLabels.map((step, index) => {
+                      const state =
+                        index < hostControlCurrentStepIndex
+                          ? "done"
+                          : index === hostControlCurrentStepIndex
+                            ? "active"
+                            : "todo";
+
+                      return (
+                        <span key={step.key} className={state}>
+                          {step.label}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
                 <div className="actions-row">
                   <Button
                     type="button"
                     variant={room.status === "lobby" || !room.vote_enabled ? "primary" : "secondary"}
-                    className={roomLogic.busy ? "loading" : undefined}
+                    className={`${roomLogic.busy ? "loading " : ""}${room.status === "lobby" || !room.vote_enabled ? "main-next-action" : ""}`.trim() || undefined}
                     onClick={() =>
                       roomLogic.startRound(roomId, room.category, room.undercover_count, effectiveWhiteboardCount, categories, {
                         provider: "groq",
@@ -984,7 +1124,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                     <Button
                       type="button"
                       variant="primary"
-                      className={roomLogic.busy ? "loading" : undefined}
+                      className={`${roomLogic.busy ? "loading " : ""}main-next-action`.trim()}
                       onClick={() => roomLogic.openVoting(roomId)}
                       disabled={roomLogic.busy}
                     >
@@ -999,7 +1139,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                     <Button
                       type="button"
                       variant="primary"
-                      className={roomLogic.busy ? "loading" : undefined}
+                      className={`${roomLogic.busy ? "loading " : ""}main-next-action`.trim()}
                       onClick={async () => {
                         const confirmed = await roomLogic.askForConfirmation({
                           title: "确认强制公布本轮投票结果？",
@@ -1027,33 +1167,51 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
             <p className="hint">当前发言顺序（每局自动轮换）：</p>
             <motion.ul className="player-list" layout>
               <AnimatePresence initial={false}>
-                {rotatedPlayers.map((player, index) => (
-                  <motion.li
-                    key={player.id}
-                    layout
-                    layoutId={`player-${player.id}`}
-                    className={!player.is_alive ? "out" : ""}
-                    initial={{ opacity: 0, x: -14, scale: 0.985 }}
-                    animate={{
-                      opacity: 1,
-                      x: 0,
-                      scale: 1,
-                      transition: { duration: 0.2, ease: "easeOut" },
-                    }}
-                    exit={{
-                      opacity: 0,
-                      x: 12,
-                      scale: 0.985,
-                      transition: { duration: 0.16, ease: "easeIn" },
-                    }}
-                  >
+                {rotatedPlayers.map((player, index) => {
+                  const isSelfPlayer = player.session_id === sessionId;
+                  const isHostPlayer = room.host_session_id === player.session_id;
+                  const isOutPlayer = !player.is_alive;
+                  const priority = isSelfPlayer ? 0 : isHostPlayer ? 1 : isOutPlayer ? 3 : 2;
+                  const priorityClass = isSelfPlayer
+                    ? "self-priority"
+                    : isHostPlayer
+                      ? "host-priority"
+                      : isOutPlayer
+                        ? "out-priority"
+                        : "normal-priority";
+
+                  return (
+                    <motion.li
+                      key={player.id}
+                      layout
+                      layoutId={`player-${player.id}`}
+                      className={`${isOutPlayer ? "out " : ""}${priorityClass}`.trim()}
+                      style={{ zIndex: 20 - priority }}
+                      initial={{ opacity: 0, x: -18 + priority * 3, scale: 0.98 - priority * 0.004 }}
+                      animate={{
+                        opacity: 1,
+                        x: 0,
+                        scale: 1,
+                        transition: {
+                          duration: 0.24,
+                          ease: "easeOut",
+                          delay: Math.min(0.06, priority * 0.012 + index * 0.008),
+                        },
+                      }}
+                      exit={{
+                        opacity: 0,
+                        x: 10 + priority * 3,
+                        scale: 0.985,
+                        transition: { duration: 0.16, ease: "easeIn" },
+                      }}
+                    >
                     <span className="player-meta">
                       <span className="player-index">玩家{player.seat_no}</span>
                       <span className="player-content">
                         <span className="player-name">
                           {player.name}
-                          {player.session_id === sessionId && <span className="player-badge self">你</span>}
-                          {room.host_session_id === player.session_id && <span className="player-badge host">房主</span>}
+                          {isSelfPlayer && <span className="player-badge self">你</span>}
+                          {isHostPlayer && <span className="player-badge host">房主</span>}
                         </span>
                         <span className="player-note">
                           发言位次 {index + 1} · {player.is_alive ? "存活" : "出局"}
@@ -1083,13 +1241,14 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                         </Button>
                       )}
                     </span>
-                  </motion.li>
-                ))}
+                    </motion.li>
+                  );
+                })}
               </AnimatePresence>
             </motion.ul>
 
             {room.vote_enabled && room.status === "voting" && currentPlayer && (
-              <div className="vote-box">
+              <div className="vote-box acet-card-lift">
                 <div className="vote-head-row">
                   <h3>本轮投票</h3>
                   <p className="hint vote-head-count">
@@ -1122,20 +1281,29 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   </p>
                 )}
 
-                <label>
-                  选择你怀疑的卧底
-                  <select value={voteTargetId} onChange={(event) => setVoteTargetId(event.target.value)} disabled={!canCurrentPlayerVote}>
-                    <option value="">请选择玩家</option>
-                    <option value="__ABSTAIN__">弃票（不投任何人）</option>
-                    {voteScopePlayers
-                      .filter((p) => p.id !== currentPlayer.id)
-                      .map((p) => (
-                        <option key={p.id} value={p.id}>
-                          玩家 {p.seat_no} · {p.name}
-                        </option>
-                      ))}
-                  </select>
-                </label>
+                <div>
+                  <p className="vote-candidate-label">选择你怀疑的卧底</p>
+                  <div className="vote-candidate-grid" role="radiogroup" aria-label="投票候选区">
+                    {voteCandidateOptions.map((option) => {
+                      const selected = voteTargetId === option.value;
+                      return (
+                        <Button
+                          key={option.key}
+                          type="button"
+                          variant={selected ? "primary" : "ghost"}
+                          size="sm"
+                          className={`vote-candidate-chip${selected ? " selected" : ""}${option.isAbstain ? " abstain" : ""}`}
+                          disabled={!canCurrentPlayerVote || roomLogic.busy}
+                          aria-pressed={selected}
+                          onClick={() => setVoteTargetId(option.value)}
+                        >
+                          <span className="vote-candidate-title">{option.title}</span>
+                          <span className="vote-candidate-meta">{option.meta}</span>
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
 
                   {canCurrentPlayerVote && !hasVoteSelection && (
                     <p className="hint vote-gate-hint">请先选择投票对象或“弃票”。</p>
@@ -1144,7 +1312,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                 <Button
                   type="button"
                   variant="primary"
-                  className={roomLogic.busy ? "loading" : undefined}
+                  className={`${roomLogic.busy ? "loading " : ""}main-next-action`.trim()}
                   onClick={async () => {
                     const ok = await roomLogic.castVote(roomId, voteTargetId, voteScopePlayers);
                     if (ok) {
