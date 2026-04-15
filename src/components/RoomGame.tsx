@@ -637,11 +637,11 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
       <div className="page-shell">
         <main className="app-wrap">
           <section className="hero-card">
-            <h1 className="hero-title" style={{ color: "red" }}>错误</h1>
+            <h1 className="hero-title error-title">错误</h1>
             <p>{roomError || "房间不存在"}</p>
-            <button className="btn primary" onClick={() => router.push("/")}>
+            <Button type="button" variant="primary" onClick={() => router.push("/")}>
               返回首页
-            </button>
+            </Button>
           </section>
         </main>
       </div>
@@ -696,8 +696,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
 
             {canEditRoomConfig && (
               <div
-                className="room-category-editor"
-                style={{ position: "relative" }}
+                className="room-category-editor category-picker"
                 onBlur={() => {
                   window.setTimeout(() => setRoomCategorySearchOpen(false), 120);
                 }}
@@ -705,6 +704,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                 <div className="inline-row">
                   <input
                     type="text"
+                    className="category-picker-input"
                     value={roomCategoryInputValue}
                     onChange={(event) => {
                       const nextValue = event.target.value;
@@ -713,9 +713,10 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                     onFocus={() => setRoomCategorySearchOpen(true)}
                     placeholder="搜索并修改房间类别"
                   />
-                  <button
+                  <Button
                     type="button"
-                    className={`btn ghost${categorySaveState === "saving" ? " loading" : ""}${categorySaveState === "saved" ? " saved" : ""}`}
+                    variant="ghost"
+                    className={`${categorySaveState === "saving" ? "loading" : ""}${categorySaveState === "saved" ? " saved" : ""}`.trim() || undefined}
                     onClick={async () => {
                       if (!trimmedCategoryDraft) {
                         roomLogic.setError("类别不能为空。");
@@ -742,77 +743,43 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                     disabled={roomLogic.busy || categorySaveState === "saving" || !categoryDirty || !trimmedCategoryDraft}
                   >
                     {categorySaveState === "saving" ? "保存中..." : categorySaveState === "saved" ? "已保存" : "保存类别"}
-                  </button>
+                  </Button>
                 </div>
 
                 {roomCategorySearchOpen && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      top: "100%",
-                      left: 0,
-                      right: 0,
-                      backgroundColor: "#fff",
-                      border: "1px solid #ccc",
-                      borderTop: "none",
-                      borderRadius: "0 0 4px 4px",
-                      maxHeight: "260px",
-                      overflowY: "auto",
-                      zIndex: 1000,
-                    }}
-                  >
-                    <div
-                      style={{
-                        padding: "8px 12px",
-                        fontSize: "12px",
-                        color: "#777",
-                        borderBottom: "1px solid #eee",
-                        backgroundColor: "#fafafa",
-                      }}
-                    >
+                  <div className="category-menu">
+                    <div className="category-menu-header">
                       {roomCategoryInputValue.trim() ? "模糊匹配结果" : "Top10 热门种类词"}
                     </div>
 
                     {roomCategorySuggestions.map((item) => (
-                      <button
+                      <Button
                         key={`room-${item.key}`}
                         type="button"
-                        style={{
-                          width: "100%",
-                          textAlign: "left",
-                          padding: "8px 12px",
-                          border: "none",
-                          borderBottom: "1px solid #eee",
-                          backgroundColor: trimmedCategoryDraft === item.subcategoryDisplayName ? "#e8f4f8" : "#fff",
-                          cursor: "pointer",
-                        }}
+                        variant="ghost"
+                        size="sm"
+                        className={`category-option${trimmedCategoryDraft === item.subcategoryDisplayName ? " active" : ""}`}
                         onClick={() => {
                           const nextCategory = item.subcategoryDisplayName;
                           setRoomCategoryDraftValue(nextCategory);
                           setRoomCategorySearchOpen(false);
                         }}
                       >
-                        <div style={{ fontWeight: 600 }}>{item.subcategoryDisplayName}</div>
-                        <div style={{ fontSize: "12px", color: "#666" }}>
+                        <div className="category-option-title">{item.subcategoryDisplayName}</div>
+                        <div className="category-option-meta">
                           {item.categoryDisplayName}
                           {item.examples.length > 0 ? ` · 例：${item.examples.join(" vs ")}` : ""}
                           {item.usageCount > 0 ? ` · 热度 ${item.usageCount}` : ""}
                         </div>
-                      </button>
+                      </Button>
                     ))}
 
                     {roomCategoryInputValue.trim() && (
-                      <button
+                      <Button
                         type="button"
-                        style={{
-                          width: "100%",
-                          textAlign: "left",
-                          padding: "10px 12px",
-                          border: "none",
-                          backgroundColor: "#f8fbff",
-                          cursor: "pointer",
-                          color: "#1d4ed8",
-                        }}
+                        variant="ghost"
+                        size="sm"
+                        className="category-option custom"
                         onClick={() => {
                           const custom = roomCategoryInputValue.trim();
                           setRoomCategoryDraftValue(custom);
@@ -820,7 +787,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                         }}
                       >
                         使用“{roomCategoryInputValue.trim()}”作为自定义类别
-                      </button>
+                      </Button>
                     )}
                   </div>
                 )}
@@ -840,9 +807,10 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   }}
                   placeholder="卧底人数（1-3）"
                 />
-                <button
+                <Button
                   type="button"
-                  className={`btn ghost${undercoverSaveState === "saving" ? " loading" : ""}${undercoverSaveState === "saved" ? " saved" : ""}`}
+                  variant="ghost"
+                  className={`${undercoverSaveState === "saving" ? "loading" : ""}${undercoverSaveState === "saved" ? " saved" : ""}`.trim() || undefined}
                   onClick={async () => {
                     if (undercoverCountDraft == null) {
                       roomLogic.setError("请输入 1 到 3 的卧底人数。");
@@ -868,13 +836,13 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   disabled={roomLogic.busy || undercoverSaveState === "saving" || !undercoverCountDirty || undercoverCountDraft == null}
                 >
                   {undercoverSaveState === "saving" ? "保存中..." : undercoverSaveState === "saved" ? "已保存" : "保存卧底人数"}
-                </button>
+                </Button>
               </div>
             )}
 
             {canEditRoomConfig && (
               <div className="inline-row room-category-editor">
-                <label style={{ flex: 1 }}>
+                <label className="field-label-inline">
                   白板人数（0-2）
                   <input
                     type="number"
@@ -909,9 +877,10 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   }}
                   placeholder="投票时长（秒）"
                 />
-                <button
+                <Button
                   type="button"
-                  className={`btn ghost${voteDurationSaveState === "saving" ? " loading" : ""}${voteDurationSaveState === "saved" ? " saved" : ""}`}
+                  variant="ghost"
+                  className={`${voteDurationSaveState === "saving" ? "loading" : ""}${voteDurationSaveState === "saved" ? " saved" : ""}`.trim() || undefined}
                   onClick={async () => {
                     if (voteDurationDraft == null) {
                       roomLogic.setError("请输入大于等于 0 秒的投票时长。");
@@ -937,7 +906,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   disabled={roomLogic.busy || voteDurationSaveState === "saving" || !voteDurationDirty || voteDurationDraft == null}
                 >
                   {voteDurationSaveState === "saving" ? "保存中..." : voteDurationSaveState === "saved" ? "已保存" : "保存投票时长"}
-                </button>
+                </Button>
               </div>
             )}
 
@@ -969,13 +938,13 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
 
             <div className="actions-row">
               {room.status !== "lobby" && (
-                <button type="button" className="btn" onClick={() => setWordVisible((v) => !v)}>
+                <Button type="button" variant="secondary" onClick={() => setWordVisible((v) => !v)}>
                   {wordVisible ? "隐藏我的词" : "显示我的词"}
-                </button>
+                </Button>
               )}
-              <button
+              <Button
                 type="button"
-                className="btn ghost"
+                variant="ghost"
                 onClick={async () => {
                   const success = await roomLogic.leaveRoom(roomId);
                   if (success) {
@@ -984,14 +953,14 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                 }}
               >
                 退出房间
-              </button>
+              </Button>
             </div>
 
             {isHost && (
               <div className="host-actions">
                 <h3>房主操作</h3>
                 <div className="inline-row room-category-editor">
-                  <label style={{ flex: 1 }}>
+                  <label className="field-label-inline">
                     AI 模型策略
                     <select
                       value={selectedAiModel}
@@ -1012,9 +981,10 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                 </p>
                 <p className="hint">适用场景：{selectedModelProfile.scenario}</p>
                 <div className="actions-row">
-                  <button
+                  <Button
                     type="button"
-                    className={`btn primary${roomLogic.busy ? " loading" : ""}`}
+                    variant="primary"
+                    className={roomLogic.busy ? "loading" : undefined}
                     onClick={() =>
                       roomLogic.startRound(roomId, room.category, room.undercover_count, effectiveWhiteboardCount, categories, {
                         provider: "groq",
@@ -1028,11 +998,12 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                       : room.round_number === 0
                         ? "开始本局（AI 生成 1 组词）"
                         : "重开新局（重新生成 1 组词）"}
-                  </button>
+                  </Button>
                   {room.vote_enabled && room.status === "playing" && (
-                    <button
+                    <Button
                       type="button"
-                      className={`btn${roomLogic.busy ? " loading" : ""}`}
+                      variant="secondary"
+                      className={roomLogic.busy ? "loading" : undefined}
                       onClick={() => roomLogic.openVoting(roomId)}
                       disabled={roomLogic.busy}
                     >
@@ -1041,12 +1012,13 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                         : room.vote_candidate_ids && room.vote_candidate_ids.length > 0
                           ? `开启第 ${room.vote_round} 轮加赛投票`
                           : `开启第 ${room.vote_round} 轮投票`}
-                    </button>
+                    </Button>
                   )}
                   {room.vote_enabled && room.status === "voting" && (
-                    <button
+                    <Button
                       type="button"
-                      className={`btn primary${roomLogic.busy ? " loading" : ""}`}
+                      variant="primary"
+                      className={roomLogic.busy ? "loading" : undefined}
                       onClick={async () => {
                         const confirmed = await roomLogic.askForConfirmation({
                           title: "确认强制公布本轮投票结果？",
@@ -1062,7 +1034,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                       disabled={roomLogic.busy}
                     >
                       {roomLogic.busy ? "处理中..." : "强制公布本轮投票结果"}
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>
@@ -1112,9 +1084,11 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                     </span>
                     <span className="player-side">
                       {isHost && player.session_id !== sessionId && (
-                        <button
+                        <Button
                           type="button"
-                          className={`btn danger tiny${roomLogic.busy ? " loading" : ""}`}
+                          variant="danger"
+                          size="sm"
+                          className={roomLogic.busy ? "loading" : undefined}
                           onClick={async () => {
                             suppressedLeavePlayerIdsRef.current.add(player.id);
                             const ok = await roomLogic.kickPlayer(roomId, player);
@@ -1125,7 +1099,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                           disabled={roomLogic.busy}
                         >
                           踢出
-                        </button>
+                        </Button>
                       )}
                     </span>
                   </motion.li>
@@ -1183,9 +1157,10 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                       ))}
                   </select>
                 </label>
-                <button
+                <Button
                   type="button"
-                  className={`btn primary${roomLogic.busy ? " loading" : ""}`}
+                  variant="primary"
+                  className={roomLogic.busy ? "loading" : undefined}
                   onClick={async () => {
                     const ok = await roomLogic.castVote(roomId, voteTargetId, voteScopePlayers);
                     if (ok) {
@@ -1195,7 +1170,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   disabled={roomLogic.busy || !canCurrentPlayerVote}
                 >
                   {roomLogic.busy ? "提交中..." : "提交/更新我的投票"}
-                </button>
+                </Button>
               </div>
             )}
 
@@ -1215,14 +1190,15 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                 placeholder="请输入你猜测的平民词"
               />
               <div className="actions-row">
-                <button
+                <Button
                   type="button"
-                  className={`btn primary${roomLogic.busy ? " loading" : ""}`}
+                  variant="primary"
+                  className={roomLogic.busy ? "loading" : undefined}
                   disabled={roomLogic.busy || !whiteboardGuess.trim()}
                   onClick={() => roomLogic.submitWhiteboardGuess(roomId, whiteboardGuess, "grok")}
                 >
                   {roomLogic.busy ? "提交中..." : "提交猜词"}
-                </button>
+                </Button>
               </div>
             </div>
           </div>
