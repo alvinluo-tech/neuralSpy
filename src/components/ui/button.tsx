@@ -4,20 +4,22 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+  "ui-btn",
   {
     variants: {
       variant: {
-        default: "bg-teal-800 text-slate-50 hover:bg-teal-900 focus-visible:ring-teal-700",
-        secondary: "bg-slate-100 text-slate-900 hover:bg-slate-200 focus-visible:ring-slate-400",
-        outline: "border border-slate-300 bg-white text-slate-900 hover:bg-slate-100 focus-visible:ring-slate-400",
-        ghost: "text-slate-800 hover:bg-slate-100 focus-visible:ring-slate-400",
-        danger: "bg-amber-700 text-amber-50 hover:bg-amber-800 focus-visible:ring-amber-600",
+        default: "ui-btn--primary",
+        primary: "ui-btn--primary",
+        secondary: "ui-btn--secondary",
+        outline: "ui-btn--outline",
+        ghost: "ui-btn--ghost",
+        danger: "ui-btn--danger",
       },
       size: {
-        default: "h-10 px-4 py-2",
-        sm: "h-9 rounded-md px-3",
-        lg: "h-11 rounded-md px-8",
+        default: "ui-btn--md",
+        sm: "ui-btn--sm",
+        lg: "ui-btn--lg",
+        icon: "ui-btn--icon",
       },
     },
     defaultVariants: {

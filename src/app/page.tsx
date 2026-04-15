@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { supabase } from "@/lib/supabase";
 import { useCategorySearch } from "@/hooks/useCategorySearch";
 import { useTrackPage } from "@/hooks/useTrackPage";
+import { Button } from "@/components/ui/button";
 import { NoticeToast } from "@/components/ui/notice-toast";
 import { identifySession, trackEvent } from "@/lib/umami";
 
@@ -435,20 +436,20 @@ export default function HomePage() {
             <h2>开局流程</h2>
             <span className="status-pill">当前模式：{flowModeLabel}</span>
           </div>
-          <div className="home-flow-steps" aria-label="大厅流程步骤预览">
+          <ol className="home-flow-steps" aria-label="大厅流程步骤预览">
             {HOME_FLOW_STEPS.map((item, index) => {
               const state =
                 item.step <= flowCompletedStep ? "done" : flowCurrentStep === item.step ? "current" : "todo";
 
               return (
-                <div className="home-flow-item" key={item.step}>
+                <li className="home-flow-item" key={item.step}>
                   <span className={`home-flow-dot ${state}`}>{item.step <= flowCompletedStep ? "OK" : item.step}</span>
                   <span className={`home-flow-label ${state}`}>{item.label}</span>
                   {index < HOME_FLOW_STEPS.length - 1 && <span className="home-flow-arrow">→</span>}
-                </div>
+                </li>
               );
             })}
-          </div>
+          </ol>
           <p className="hint">下一步：{flowNextAction}</p>
         </section>
 
@@ -457,9 +458,9 @@ export default function HomePage() {
             <article className="panel entry-option-card entry-option-primary">
               <h2>创建新房间</h2>
               <p className="hint">成为房主并设置类别、卧底人数和投票规则。</p>
-              <button type="button" className="btn primary major" onClick={() => setEntryMode("create")}>
+              <Button type="button" variant="primary" size="lg" onClick={() => setEntryMode("create")}>
                 我来创建
-              </button>
+              </Button>
             </article>
 
             <div className="entry-cta-divider" aria-hidden="true">
@@ -469,16 +470,17 @@ export default function HomePage() {
             <article className="panel entry-option-card entry-option-secondary">
               <h2>加入已有房间</h2>
               <p className="hint">输入邀请码，快速加入朋友已经创建的房间。</p>
-              <button
+              <Button
                 type="button"
-                className="btn ghost minor"
+                variant="ghost"
+                size="md"
                 onClick={() => {
                   resetJoinCodeSlots();
                   setEntryMode("join");
                 }}
               >
                 我去加入
-              </button>
+              </Button>
             </article>
           </section>
         )}
@@ -488,9 +490,9 @@ export default function HomePage() {
             <article className="panel">
               <div className="entry-form-head">
                 <h2>创建房间</h2>
-                <button type="button" className="btn ghost" onClick={() => setEntryMode(null)}>
+                <Button type="button" variant="ghost" onClick={() => setEntryMode(null)}>
                   返回选择
-                </button>
+                </Button>
               </div>
 
               <label>
@@ -505,13 +507,14 @@ export default function HomePage() {
               <label>
                 本局类别
                 <div
-                  style={{ position: "relative" }}
+                  className="category-picker"
                   onBlur={() => {
                     window.setTimeout(() => setCategorySearchOpen(false), 120);
                   }}
                 >
                   <input
                     type="text"
+                    className="category-picker-input"
                     value={categorySearchQuery}
                     onChange={(event) => {
                       setCategorySearchQuery(event.target.value);
@@ -519,105 +522,59 @@ export default function HomePage() {
                     }}
                     onFocus={() => setCategorySearchOpen(true)}
                     placeholder="搜索分类..."
-                    style={{
-                      width: "100%",
-                      padding: "8px",
-                      border: "1px solid #ccc",
-                      borderRadius: "4px",
-                    }}
                   />
                   {categorySearchOpen && (
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: "100%",
-                        left: 0,
-                        right: 0,
-                        backgroundColor: "#fff",
-                        border: "1px solid #ccc",
-                        borderTop: "none",
-                        borderRadius: "0 0 4px 4px",
-                        maxHeight: "300px",
-                        overflowY: "auto",
-                        zIndex: 1000,
-                      }}
-                    >
-                      <div
-                        style={{
-                          padding: "8px 12px",
-                          fontSize: "12px",
-                          color: "#777",
-                          borderBottom: "1px solid #eee",
-                          backgroundColor: "#fafafa",
-                        }}
-                      >
+                    <div className="category-menu">
+                      <div className="category-menu-header">
                         {categorySearchQuery.trim() ? "模糊匹配结果" : "Top10 热门种类词"}
                       </div>
 
                       {categorySuggestions.length === 0 && categorySearchQuery.trim() ? (
-                        <div
-                          style={{
-                            padding: "10px 12px",
-                            borderBottom: "1px solid #eee",
-                            color: "#666",
-                          }}
-                        >
+                        <div className="category-empty">
                           没有匹配结果，继续输入可自定义类别。
                         </div>
                       ) : (
                         categorySuggestions.map((item) => (
-                          <button
+                          <Button
                             key={item.key}
                             type="button"
-                            style={{
-                              width: "100%",
-                              textAlign: "left",
-                              padding: "8px 12px",
-                              border: "none",
-                              borderBottom: "1px solid #eee",
-                              backgroundColor: createCategory === item.subcategoryDisplayName ? "#e8f4f8" : "#fff",
-                              cursor: "pointer",
-                            }}
+                            variant="ghost"
+                            size="sm"
+                            className={`category-option${createCategory === item.subcategoryDisplayName ? " active" : ""}`}
                             onClick={() => {
                               setCreateCategory(item.subcategoryDisplayName);
                               setCategorySearchQuery(item.subcategoryDisplayName);
                               setCategorySearchOpen(false);
                             }}
                           >
-                            <div style={{ fontWeight: 600 }}>{item.subcategoryDisplayName}</div>
-                            <div style={{ fontSize: "12px", color: "#666" }}>
+                            <div className="category-option-title">{item.subcategoryDisplayName}</div>
+                            <div className="category-option-meta">
                               {item.categoryDisplayName}
                               {item.examples.length > 0 ? ` · 例：${item.examples.join(" vs ")}` : ""}
                               {item.usageCount > 0 ? ` · 热度 ${item.usageCount}` : ""}
                             </div>
-                          </button>
+                          </Button>
                         ))
                       )}
 
                       {categorySearchQuery.trim() && (
-                        <button
+                        <Button
                           type="button"
-                          style={{
-                            width: "100%",
-                            textAlign: "left",
-                            padding: "10px 12px",
-                            border: "none",
-                            backgroundColor: "#f8fbff",
-                            cursor: "pointer",
-                            color: "#1d4ed8",
-                          }}
+                          variant="ghost"
+                          size="sm"
+                          className="category-option custom"
                           onClick={() => {
                             setCreateCategory(categorySearchQuery.trim());
                             setCategorySearchOpen(false);
                           }}
                         >
                           使用“{categorySearchQuery.trim()}”作为自定义类别
-                        </button>
+                        </Button>
                       )}
                     </div>
                   )}
                 </div>
-                <p style={{ fontSize: "14px", color: "#666", marginTop: "4px" }}>
+                <p className="category-current">
                   当前选择：<strong>{createCategory || "未选择"}</strong>
                 </p>
               </label>
@@ -647,7 +604,7 @@ export default function HomePage() {
                     animate={{ opacity: 1, y: 0, height: "auto" }}
                     exit={{ opacity: 0, y: -8, height: 0 }}
                     transition={{ duration: 0.2, ease: "easeOut" }}
-                    style={{ overflow: "hidden" }}
+                    className="motion-collapse"
                   >
                     <label>
                       每轮投票限时（秒）
@@ -663,9 +620,15 @@ export default function HomePage() {
                   </motion.div>
                 )}
               </AnimatePresence>
-              <button type="button" className={`btn primary${busy ? " loading" : ""}`} onClick={createRoom} disabled={busy}>
+              <Button
+                type="button"
+                variant="primary"
+                className={busy ? "loading" : undefined}
+                onClick={createRoom}
+                disabled={busy}
+              >
                 {busy ? "处理中..." : "创建房间"}
-              </button>
+              </Button>
             </article>
           </section>
         )}
@@ -682,9 +645,9 @@ export default function HomePage() {
               <div className="join-drawer-handle" aria-hidden="true" />
               <div className="entry-form-head">
                 <h2>加入房间</h2>
-                <button type="button" className="btn ghost" onClick={() => setEntryMode(null)} disabled={busy}>
+                <Button type="button" variant="ghost" onClick={() => setEntryMode(null)} disabled={busy}>
                   返回
-                </button>
+                </Button>
               </div>
 
               <label>
@@ -721,9 +684,15 @@ export default function HomePage() {
                 <p className="hint">请输入 6 位邀请码（字母或数字）。</p>
               </label>
 
-              <button type="button" className={`btn primary${busy ? " loading" : ""}`} onClick={joinRoom} disabled={busy}>
+              <Button
+                type="button"
+                variant="primary"
+                className={busy ? "loading" : undefined}
+                onClick={joinRoom}
+                disabled={busy}
+              >
                 {busy ? "处理中..." : "加入房间"}
-              </button>
+              </Button>
             </section>
           </div>
         )}

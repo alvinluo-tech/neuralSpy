@@ -145,42 +145,170 @@ const readMessageContent = (
   return "";
 };
 
-const parseJsonFromContent = (content: string): GrokPair[] => {
-  const jsonCandidate = content.match(/\{[\s\S]*\}/)?.[0] ?? content;
-  const parsed = JSON.parse(jsonCandidate) as {
-    pairs?: Array<{ civilian?: string; undercover?: string }>;
-    pair?: { civilian?: string; undercover?: string };
-  };
+const toPair = (value: unknown): GrokPair | null => {
+  if (!value || typeof value !== "object") return null;
 
-  if (parsed.pair) {
-    return [
-      {
-        civilian: parsed.pair.civilian?.trim() ?? "",
-        undercover: parsed.pair.undercover?.trim() ?? "",
-      },
-    ].filter(
-      (pair) =>
-        pair.civilian.length > 0 &&
-        pair.undercover.length > 0 &&
-        pair.civilian !== pair.undercover,
-    );
+  const record = value as Record<string, unknown>;
+  const civilian = typeof record.civilian === "string" ? record.civilian.trim() : "";
+  const undercover = typeof record.undercover === "string" ? record.undercover.trim() : "";
+
+  if (!civilian || !undercover || civilian === undercover) return null;
+  return { civilian, undercover };
+};
+
+const toPairs = (value: unknown): GrokPair[] => {
+  if (Array.isArray(value)) {
+    return value.map((item) => toPair(item)).filter((item): item is GrokPair => item !== null);
   }
 
-  if (!Array.isArray(parsed.pairs)) {
+  const single = toPair(value);
+  return single ? [single] : [];
+};
+
+const extractPairsFromParsed = (parsed: unknown): GrokPair[] => {
+  if (Array.isArray(parsed)) {
+    return toPairs(parsed);
+  }
+
+  if (!parsed || typeof parsed !== "object") {
     return [];
   }
 
-  return parsed.pairs
-    .map((pair) => ({
-      civilian: pair.civilian?.trim() ?? "",
-      undercover: pair.undercover?.trim() ?? "",
-    }))
-    .filter(
-      (pair) =>
-        pair.civilian.length > 0 &&
-        pair.undercover.length > 0 &&
-        pair.civilian !== pair.undercover,
-    );
+  const record = parsed as Record<string, unknown>;
+
+  const fromDirect = toPair(record);
+  if (fromDirect) {
+    return [fromDirect];
+  }
+
+  const fromPairField = toPairs(record.pair);
+  if (fromPairField.length > 0) {
+    return fromPairField;
+  }
+
+  const fromPairsField = toPairs(record.pairs);
+  if (fromPairsField.length > 0) {
+    return fromPairsField;
+  }
+
+  const fromData = extractPairsFromParsed(record.data);
+  if (fromData.length > 0) {
+    return fromData;
+  }
+
+  return [];
+};
+
+const extractFencedJsonCandidates = (content: string): string[] => {
+  const candidates: string[] = [];
+  const regex = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null = regex.exec(content);
+
+  while (match) {
+    const candidate = (match[1] ?? "").trim();
+    if (candidate) {
+      candidates.push(candidate);
+    }
+    match = regex.exec(content);
+  }
+
+  return candidates;
+};
+
+const extractBalancedJsonCandidates = (content: string): string[] => {
+  const candidates: string[] = [];
+  const matchingClose = (token: string) => (token === "{" ? "}" : "]");
+
+  let start = -1;
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+
+    if (start < 0) {
+      if (char === "{" || char === "[") {
+        start = index;
+        stack.push(char);
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{" || char === "[") {
+      stack.push(char);
+      continue;
+    }
+
+    if (char !== "}" && char !== "]") {
+      continue;
+    }
+
+    const open = stack[stack.length - 1];
+    if (!open || matchingClose(open) !== char) {
+      start = -1;
+      stack.length = 0;
+      inString = false;
+      escaped = false;
+      continue;
+    }
+
+    stack.pop();
+
+    if (stack.length === 0) {
+      const candidate = content.slice(start, index + 1).trim();
+      if (candidate) {
+        candidates.push(candidate);
+      }
+      start = -1;
+    }
+  }
+
+  return candidates;
+};
+
+const parseJsonFromContent = (content: string): GrokPair[] => {
+  const rawCandidates = [
+    content.trim(),
+    ...extractFencedJsonCandidates(content),
+    ...extractBalancedJsonCandidates(content),
+    content.match(/\{[\s\S]*\}/)?.[0] ?? "",
+    content.match(/\[[\s\S]*\]/)?.[0] ?? "",
+  ];
+
+  const candidates = Array.from(
+    new Set(rawCandidates.map((item) => item.trim()).filter(Boolean)),
+  );
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      const pairs = extractPairsFromParsed(parsed);
+      if (pairs.length > 0) {
+        return pairs;
+      }
+    } catch {
+      // Continue trying other candidate blocks.
+    }
+  }
+
+  return [];
 };
 
 export async function POST(request: NextRequest) {
