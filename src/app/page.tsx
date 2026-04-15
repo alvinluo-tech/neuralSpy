@@ -422,16 +422,26 @@ export default function HomePage() {
 
   return (
     <div className="page-shell">
-      <main className="app-wrap">
-        <section className="hero-card">
+      <main className="app-wrap aceternity-stage">
+        <motion.section
+          className="hero-card hero-card--lift acet-spotlight"
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.42, ease: "easeOut" }}
+        >
           <p className="eyebrow">Realtime Room Mode</p>
           <h1 className="hero-title">谁是卧底多人房间</h1>
           <p className="hero-subtitle">
             支持多人进入同一房间。每局只调用 AI 生成 1 组词，发词后直接开玩，按轮投票并由系统公布结果。
           </p>
-        </section>
+        </motion.section>
 
-        <section className="panel home-flow-panel">
+        <motion.section
+          className="panel home-flow-panel acet-card-lift"
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.42, delay: 0.06, ease: "easeOut" }}
+        >
           <div className="home-flow-head">
             <h2>开局流程</h2>
             <span className="status-pill">当前模式：{flowModeLabel}</span>
@@ -451,14 +461,25 @@ export default function HomePage() {
             })}
           </ol>
           <p className="hint">下一步：{flowNextAction}</p>
-        </section>
+        </motion.section>
 
         {entryMode === null && (
-          <section className="entry-cta-stack">
-            <article className="panel entry-option-card entry-option-primary">
+          <motion.section
+            className="entry-cta-stack"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.42, delay: 0.12, ease: "easeOut" }}
+          >
+            <article className="panel entry-option-card entry-option-primary acet-card-lift">
               <h2>创建新房间</h2>
               <p className="hint">成为房主并设置类别、卧底人数和投票规则。</p>
-              <Button type="button" variant="primary" size="lg" onClick={() => setEntryMode("create")}>
+              <Button
+                type="button"
+                variant="primary"
+                size="lg"
+                className="main-next-action"
+                onClick={() => setEntryMode("create")}
+              >
                 我来创建
               </Button>
             </article>
@@ -467,13 +488,12 @@ export default function HomePage() {
               <span>或者</span>
             </div>
 
-            <article className="panel entry-option-card entry-option-secondary">
+            <article className="panel entry-option-card entry-option-secondary acet-card-lift">
               <h2>加入已有房间</h2>
               <p className="hint">输入邀请码，快速加入朋友已经创建的房间。</p>
               <Button
                 type="button"
                 variant="ghost"
-                size="md"
                 onClick={() => {
                   resetJoinCodeSlots();
                   setEntryMode("join");
@@ -482,7 +502,7 @@ export default function HomePage() {
                 我去加入
               </Button>
             </article>
-          </section>
+          </motion.section>
         )}
 
         {entryMode === "create" && (
