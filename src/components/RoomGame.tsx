@@ -591,7 +591,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   }, []);
 
   useEffect(() => {
-    if (!room || room.status !== "voting" || autoPublishingRef.current || !isHost) return;
+    if (!room || room.status !== "voting" || autoPublishingRef.current) return;
 
     const voteKey = `${room.round_number}:${room.vote_round}`;
     if (autoSettleVoteKeyRef.current === voteKey) return;
@@ -606,13 +606,15 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
     void roomLogic
       .publishVotingResult(roomId, { silentNoop: true })
       .then((outcome) => {
-        // Keep retrying on timing-boundary noop; lock only when server actually processed this round.
-        autoSettleVoteKeyRef.current = outcome.action === "noop" ? null : voteKey;
+        const shouldRetry =
+          outcome.action === "noop" && outcome.reason === "waiting-for-deadline-or-all-votes";
+        // Retry only when it is genuinely waiting; avoid hammering the API on terminal noops.
+        autoSettleVoteKeyRef.current = shouldRetry ? null : voteKey;
       })
       .finally(() => {
         autoPublishingRef.current = false;
       });
-  }, [room, eligibleVoters.length, votedCount, voteDeadlineMs, nowMs, roomLogic, roomId, isHost]);
+  }, [room, eligibleVoters.length, votedCount, voteDeadlineMs, nowMs, roomLogic, roomId]);
 
   useEffect(() => {
     if (room?.status !== "voting") {
