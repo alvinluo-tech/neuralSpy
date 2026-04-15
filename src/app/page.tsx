@@ -473,7 +473,6 @@ export default function HomePage() {
               <Button
                 type="button"
                 variant="ghost"
-                size="md"
                 onClick={() => {
                   resetJoinCodeSlots();
                   setEntryMode("join");
