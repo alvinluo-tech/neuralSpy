@@ -639,6 +639,13 @@ button:focus {
   padding-top: 12px;
 }
 
+.host-panel-switch {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .host-actions h3,
 .vote-box h3 {
   margin: 0 0 8px;
@@ -741,6 +748,30 @@ button:focus {
   margin-top: 14px;
   border-top: 1px dashed #d3dbd5;
   padding-top: 12px;
+}
+
+.vote-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.vote-head-count {
+  margin: 0;
+}
+
+.vote-inline-hint,
+.vote-gate-hint {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.vote-gate-hint {
+  color: #c5d1ff;
 }
 
 .vote-countdown-wrap {

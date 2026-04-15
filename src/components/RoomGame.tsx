@@ -244,7 +244,8 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   const [nowMs, setNowMs] = useState(0);
   const [roomCategorySearchOpen, setRoomCategorySearchOpen] = useState(false);
   const [selectedAiModel, setSelectedAiModel] = useState(AUTO_MODEL_VALUE);
-  const [showSyncToast, setShowSyncToast] = useState(false);
+  const [showHostControlPanel, setShowHostControlPanel] = useState(true);
+  const [showHostSettingsPanel, setShowHostSettingsPanel] = useState(false);
   const [voteSubmitToast, setVoteSubmitToast] = useState("");
   const [presenceJoinToast, setPresenceJoinToast] = useState("");
   const [presenceLeaveToast, setPresenceLeaveToast] = useState("");
@@ -349,6 +350,17 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   ).size;
   const votedPlayerIds = new Set(currentRoundVotes.map((vote) => vote.voter_player_id));
   const canCurrentPlayerVote = !!currentPlayer?.is_alive && eligibleVoters.some((player) => player.id === currentPlayer.id);
+  const hasVoteSelection = voteTargetId.trim().length > 0;
+  const canSubmitVote = canCurrentPlayerVote && hasVoteSelection;
+  const voteInlineStatus = roomSyncing
+    ? "同步中，正在更新投票状态..."
+    : !currentPlayer?.is_alive
+      ? "你已出局，当前只能查看投票进度。"
+      : !canCurrentPlayerVote && restrictedTieBreak && voteCandidateIds.length > 0
+        ? "你是平票候选人，本轮不能投票，请等待其他存活玩家投票。"
+        : !canCurrentPlayerVote
+          ? "你当前轮次不可投票，请等待下一轮或结算。"
+          : null;
   const tieCandidatePlayers =
     voteCandidateIds.length === 0
       ? []
@@ -486,9 +498,6 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   const undercoverSaveResetTimerRef = useRef<number | null>(null);
   const voteDurationSaveResetTimerRef = useRef<number | null>(null);
   const gameResultTrackedKeyRef = useRef<string | null>(null);
-  const syncToastShownAtRef = useRef<number | null>(null);
-  const syncToastDelayTimerRef = useRef<number | null>(null);
-  const syncToastHideTimerRef = useRef<number | null>(null);
   const isGeneratingOverlayVisible =
     roomLogic.generatingWords || room?.result_summary === AI_GENERATING_SUMMARY;
 
@@ -519,62 +528,6 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
       voteDurationSeconds: room.vote_duration_seconds ?? 60,
     });
   }, [room, pageType, isHost, players]);
-
-  useEffect(() => {
-    const SHOW_DELAY_MS = 450;
-    const MIN_VISIBLE_MS = 900;
-
-    if (roomSyncing) {
-      if (syncToastHideTimerRef.current != null) {
-        window.clearTimeout(syncToastHideTimerRef.current);
-        syncToastHideTimerRef.current = null;
-      }
-
-      if (!showSyncToast && syncToastDelayTimerRef.current == null) {
-        syncToastDelayTimerRef.current = window.setTimeout(() => {
-          syncToastShownAtRef.current = Date.now();
-          setShowSyncToast(true);
-          syncToastDelayTimerRef.current = null;
-        }, SHOW_DELAY_MS);
-      }
-      return;
-    }
-
-    if (syncToastDelayTimerRef.current != null) {
-      window.clearTimeout(syncToastDelayTimerRef.current);
-      syncToastDelayTimerRef.current = null;
-    }
-
-    if (!showSyncToast) return;
-
-    const shownAt = syncToastShownAtRef.current ?? Date.now();
-    const elapsed = Date.now() - shownAt;
-    const remain = Math.max(0, MIN_VISIBLE_MS - elapsed);
-
-    syncToastHideTimerRef.current = window.setTimeout(() => {
-      setShowSyncToast(false);
-      syncToastShownAtRef.current = null;
-      syncToastHideTimerRef.current = null;
-    }, remain);
-
-    return () => {
-      if (syncToastHideTimerRef.current != null) {
-        window.clearTimeout(syncToastHideTimerRef.current);
-        syncToastHideTimerRef.current = null;
-      }
-    };
-  }, [roomSyncing, showSyncToast]);
-
-  useEffect(() => {
-    return () => {
-      if (syncToastDelayTimerRef.current != null) {
-        window.clearTimeout(syncToastDelayTimerRef.current);
-      }
-      if (syncToastHideTimerRef.current != null) {
-        window.clearTimeout(syncToastHideTimerRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -697,6 +650,27 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
             <p className="hint">每轮限时：{room.vote_duration_seconds ?? 60} 秒</p>
 
             {canEditRoomConfig && (
+              <div className="host-panel-switch" role="tablist" aria-label="房主操作分区">
+                <Button
+                  type="button"
+                  variant={showHostControlPanel ? "primary" : "secondary"}
+                  size="sm"
+                  onClick={() => setShowHostControlPanel((value) => !value)}
+                >
+                  {showHostControlPanel ? "收起本局控制" : "展开本局控制"}
+                </Button>
+                <Button
+                  type="button"
+                  variant={showHostSettingsPanel ? "secondary" : "ghost"}
+                  size="sm"
+                  onClick={() => setShowHostSettingsPanel((value) => !value)}
+                >
+                  {showHostSettingsPanel ? "收起房间设置" : "展开房间设置"}
+                </Button>
+              </div>
+            )}
+
+            {canEditRoomConfig && showHostSettingsPanel && (
               <div
                 className="room-category-editor category-picker"
                 onBlur={() => {
@@ -796,7 +770,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               </div>
             )}
 
-            {canEditRoomConfig && (
+            {canEditRoomConfig && showHostSettingsPanel && (
               <div className="inline-row room-category-editor">
                 <input
                   type="text"
@@ -842,7 +816,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               </div>
             )}
 
-            {canEditRoomConfig && (
+            {canEditRoomConfig && showHostSettingsPanel && (
               <div className="inline-row room-category-editor">
                 <label className="field-label-inline">
                   白板人数（0-2）
@@ -862,11 +836,11 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               </div>
             )}
 
-            {canEditRoomConfig && whiteboardDisabledByThreePlayerMode && (
+            {canEditRoomConfig && showHostSettingsPanel && whiteboardDisabledByThreePlayerMode && (
               <p className="hint">3 人局暂不支持白板，已自动禁用。</p>
             )}
 
-            {canEditRoomConfig && (
+            {canEditRoomConfig && showHostSettingsPanel && (
               <div className="inline-row room-category-editor">
                 <input
                   type="text"
@@ -910,6 +884,32 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   {voteDurationSaveState === "saving" ? "保存中..." : voteDurationSaveState === "saved" ? "已保存" : "保存投票时长"}
                 </Button>
               </div>
+            )}
+
+            {canEditRoomConfig && showHostSettingsPanel && (
+              <>
+                <div className="inline-row room-category-editor">
+                  <label className="field-label-inline">
+                    AI 模型策略
+                    <select
+                      value={selectedAiModel}
+                      onChange={(event) => setSelectedAiModel(event.target.value)}
+                      disabled={roomLogic.busy || room.status === "voting"}
+                    >
+                      <option value={AUTO_MODEL_VALUE}>智能推荐（默认）· P0 · {DEFAULT_GROQ_MODEL}</option>
+                      {aiModelOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {`${option.priority} · ${option.label}（手动指定）`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <p className="hint">
+                  当前实际调用模型：{selectedModelProfile.label}（{selectedModelProfile.priority}） · {selectedModelProfile.reason}
+                </p>
+                <p className="hint">适用场景：{selectedModelProfile.scenario}</p>
+              </>
             )}
 
             {currentPlayer && (
@@ -958,34 +958,13 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               </Button>
             </div>
 
-            {isHost && (
+            {isHost && showHostControlPanel && (
               <div className="host-actions">
-                <h3>房主操作</h3>
-                <div className="inline-row room-category-editor">
-                  <label className="field-label-inline">
-                    AI 模型策略
-                    <select
-                      value={selectedAiModel}
-                      onChange={(event) => setSelectedAiModel(event.target.value)}
-                      disabled={roomLogic.busy || room.status === "voting"}
-                    >
-                      <option value={AUTO_MODEL_VALUE}>智能推荐（默认）· P0 · {DEFAULT_GROQ_MODEL}</option>
-                      {aiModelOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {`${option.priority} · ${option.label}（手动指定）`}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <p className="hint">
-                  当前实际调用模型：{selectedModelProfile.label}（{selectedModelProfile.priority}） · {selectedModelProfile.reason}
-                </p>
-                <p className="hint">适用场景：{selectedModelProfile.scenario}</p>
+                <h3>本局控制</h3>
                 <div className="actions-row">
                   <Button
                     type="button"
-                    variant="primary"
+                    variant={room.status === "lobby" || !room.vote_enabled ? "primary" : "secondary"}
                     className={roomLogic.busy ? "loading" : undefined}
                     onClick={() =>
                       roomLogic.startRound(roomId, room.category, room.undercover_count, effectiveWhiteboardCount, categories, {
@@ -1004,7 +983,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   {room.vote_enabled && room.status === "playing" && (
                     <Button
                       type="button"
-                      variant="secondary"
+                      variant="primary"
                       className={roomLogic.busy ? "loading" : undefined}
                       onClick={() => roomLogic.openVoting(roomId)}
                       disabled={roomLogic.busy}
@@ -1111,9 +1090,17 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
 
             {room.vote_enabled && room.status === "voting" && currentPlayer && (
               <div className="vote-box">
-                <h3>本轮投票</h3>
+                <div className="vote-head-row">
+                  <h3>本轮投票</h3>
+                  <p className="hint vote-head-count">
+                    已投票人数：{votedCount}/{eligibleVoters.length}
+                  </p>
+                </div>
+
+                {voteInlineStatus && <p className="hint vote-inline-hint">{voteInlineStatus}</p>}
+
                 <p className="hint">
-                  已投票人数：{votedCount}/{eligibleVoters.length}
+                  请选择一个目标，或选择“弃票”后再提交。
                 </p>
 
                 {remainingVoteSeconds != null && (
@@ -1125,8 +1112,6 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   </div>
                 )}
 
-                {!currentPlayer.is_alive && <p className="hint">你已出局，当前只能查看投票进度。</p>}
-
                 {room.vote_candidate_ids && room.vote_candidate_ids.length > 0 && (
                   <p className="hint">
                     当前为平票加赛：候选人仅限
@@ -1135,14 +1120,6 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                       : " 平票玩家"}
                     {restrictedTieBreak ? "；仅其余存活玩家可投票。" : "；本轮为全员平票，所有存活玩家可参与复投。"}
                   </p>
-                )}
-
-                {!canCurrentPlayerVote && restrictedTieBreak && room.vote_candidate_ids && room.vote_candidate_ids.length > 0 && (
-                  <p className="hint">你是平票候选人，本轮不能投票，请等待其他存活玩家投票。</p>
-                )}
-
-                {!canCurrentPlayerVote && !room.vote_candidate_ids && currentPlayer.is_alive && (
-                  <p className="hint">你当前轮次不可投票，请等待房主开启下一轮或结算。</p>
                 )}
 
                 <label>
@@ -1159,6 +1136,11 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                       ))}
                   </select>
                 </label>
+
+                  {canCurrentPlayerVote && !hasVoteSelection && (
+                    <p className="hint vote-gate-hint">请先选择投票对象或“弃票”。</p>
+                  )}
+
                 <Button
                   type="button"
                   variant="primary"
@@ -1169,7 +1151,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                       setVoteSubmitToast(voteTargetId === ABSTAIN_VOTE_VALUE ? "弃票已提交" : "投票已提交");
                     }
                   }}
-                  disabled={roomLogic.busy || !canCurrentPlayerVote}
+                  disabled={roomLogic.busy || !canSubmitVote}
                 >
                   {roomLogic.busy ? "提交中..." : "提交/更新我的投票"}
                 </Button>
@@ -1232,15 +1214,6 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               message={voteSubmitToast}
               durationMs={1400}
               onClose={() => setVoteSubmitToast("")}
-            />
-          )}
-          {showSyncToast && (
-            <NoticeToast
-              type="info"
-              message="同步中..."
-              onClose={() => {}}
-              autoDismiss={false}
-              showClose={false}
             />
           )}
           {!forcedExitNotice && roomLogic.error && (
