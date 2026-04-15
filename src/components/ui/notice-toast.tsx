@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useRef } from "react";
+import { Button } from "@/components/ui/button";
 
 type NoticeToastProps = {
   type: "success" | "error" | "info";
@@ -40,9 +41,16 @@ export function NoticeToast({
     <div className={`notice notice-toast ${type}`} role="status" aria-live="polite">
       <span className="notice-toast-text">{message}</span>
       {showClose && (
-        <button type="button" className="notice-toast-close" onClick={onClose} aria-label="关闭提示">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="notice-toast-close"
+          onClick={onClose}
+          aria-label="关闭提示"
+        >
           ×
-        </button>
+        </Button>
       )}
     </div>
   );
