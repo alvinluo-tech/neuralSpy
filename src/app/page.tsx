@@ -241,8 +241,8 @@ export default function HomePage() {
             .then(({ data, error: fetchError }) => {
               if (fetchError || !data) {
                 setError("邀请码对应的房间不存在或已解散。");
-              } else if (data.status !== "lobby") {
-                setError("该房间已开始游戏，无法加入。");
+              } else if (data.status === "playing" || data.status === "voting") {
+                setError("该房间已开始游戏，请等本局结束后再加入。");
               }
             });
           
@@ -421,8 +421,8 @@ export default function HomePage() {
       }
 
       if (!existing.data) {
-        if (roomStatus !== "lobby") {
-          throw new Error("该房间已开始游戏，无法加入新玩家。");
+        if (roomStatus === "playing" || roomStatus === "voting") {
+          throw new Error("该房间已开始游戏，请等本局结束后再加入新玩家。");
         }
         const maxSeat = await supabase
           .from("players")
