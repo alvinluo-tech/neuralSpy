@@ -11,6 +11,7 @@ import { NoticeToast } from "@/components/ui/notice-toast";
 import { identifySession, trackEvent } from "@/lib/umami";
 
 const SESSION_KEY = "undercover.session.id";
+const PLAYER_NICKNAME_KEY = "undercover.lastNickname";
 const PLAYER_SESSION_STARTED_TRACK_PREFIX = "undercover.player.session.started.tracked.";
 const INVITE_CODE_LENGTH = 6;
 const randomCode = () => {
@@ -232,6 +233,19 @@ export default function HomePage() {
           setJoinCodeSlots(newSlots);
           setEntryMode("join");
           
+          supabase
+            .from("rooms")
+            .select("status")
+            .eq("code", cleaned)
+            .single()
+            .then(({ data, error: fetchError }) => {
+              if (fetchError || !data) {
+                setError("邀请码对应的房间不存在或已解散。");
+              } else if (data.status !== "lobby") {
+                setError("该房间已开始游戏，无法加入。");
+              }
+            });
+          
           // clean up URL to avoid confusion if user refreshes later
           const newUrl = window.location.pathname;
           window.history.replaceState({}, "", newUrl);
@@ -240,16 +254,21 @@ export default function HomePage() {
     }
   }, []);
 
-  // Initialize session
+  // Initialize session and nickname
   useEffect(() => {
-    const raw = safeGetSessionValue(SESSION_KEY);
-    if (raw) {
-      setSessionId(raw);
-      return;
+    const rawSession = safeGetSessionValue(SESSION_KEY);
+    if (rawSession) {
+      setSessionId(rawSession);
+    } else {
+      const newId = randomSessionId();
+      safeSetSessionValue(SESSION_KEY, newId);
+      setSessionId(newId);
     }
-    const newId = randomSessionId();
-    safeSetSessionValue(SESSION_KEY, newId);
-    setSessionId(newId);
+
+    const lastNickname = safeGetSessionValue(PLAYER_NICKNAME_KEY);
+    if (lastNickname) {
+      setNickname(lastNickname);
+    }
   }, []);
 
   // Identify session in Umami and track session start once per session id.
@@ -331,6 +350,7 @@ export default function HomePage() {
         throw new Error(hostInsert.error.message);
       }
 
+      safeSetSessionValue(PLAYER_NICKNAME_KEY, nickname.trim());
       trackEvent("room_created", { roomCode: createdRoom.code });
       router.push(`/room/${createdRoom.id}/lobby`);
     } catch (err) {
@@ -427,6 +447,7 @@ export default function HomePage() {
         }
       }
 
+      safeSetSessionValue(PLAYER_NICKNAME_KEY, trimmedNickname);
       trackEvent("room_joined", { roomCode: code });
       router.push(`/room/${targetRoomId}/lobby`);
     } catch (err) {

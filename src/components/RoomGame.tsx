@@ -26,6 +26,8 @@ import {
 import { trackEvent } from "@/lib/umami";
 import { supabase } from "@/lib/supabase";
 
+import { QRCodeSVG } from "qrcode.react";
+
 const SESSION_KEY = "undercover.session.id";
 const WHITEBOARD_COUNT_STORAGE_PREFIX = "undercover.room.whiteboard.count.";
 const randomSessionId = () => {
@@ -246,6 +248,8 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   const [selectedAiModel, setSelectedAiModel] = useState(AUTO_MODEL_VALUE);
   const [showHostControlPanel, setShowHostControlPanel] = useState(true);
   const [showHostSettingsPanel, setShowHostSettingsPanel] = useState(false);
+  const [showQrCode, setShowQrCode] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
   const [voteSubmitToast, setVoteSubmitToast] = useState("");
   const [presenceJoinToast, setPresenceJoinToast] = useState("");
   const [presenceLeaveToast, setPresenceLeaveToast] = useState("");
@@ -751,22 +755,67 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
             <div className="status-row">
               <div className="status-pill-group flex items-center gap-2">
                 <span className="status-pill">邀请码：{room.code}</span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-6 px-2 text-xs"
-                  onClick={() => {
-                    const shareUrl = `${window.location.origin}/?joinCode=${room.code}`;
-                    navigator.clipboard.writeText(shareUrl).then(() => {
-                      roomLogic.setMessage("邀请链接已复制，快去分享给好友吧！");
-                    }).catch(() => {
-                      roomLogic.setError("复制失败，请手动分享邀请码。");
-                    });
-                  }}
-                >
-                  一键分享链接
-                </Button>
+                <div className="flex gap-1 relative">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => {
+                      const shareUrl = `${window.location.origin}/?joinCode=${room.code}`;
+                      
+                      const copyToClipboard = () => {
+                        navigator.clipboard.writeText(shareUrl).then(() => {
+                          setShareCopied(true);
+                          setTimeout(() => setShareCopied(false), 2000);
+                        }).catch(() => {
+                          roomLogic.setError("复制失败，请手动分享邀请码。");
+                        });
+                      };
+
+                      if (navigator.share) {
+                        navigator.share({
+                          title: '谁是卧底',
+                          text: `邀请你加入谁是卧底房间，邀请码：${room.code}`,
+                          url: shareUrl,
+                        }).catch((err) => {
+                          // User cancelled or share failed, fallback to clipboard
+                          if (err.name !== 'AbortError') {
+                            copyToClipboard();
+                          }
+                        });
+                      } else {
+                        copyToClipboard();
+                      }
+                    }}
+                  >
+                    {shareCopied ? "✅ 已复制" : "一键分享链接"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => setShowQrCode((prev) => !prev)}
+                  >
+                    二维码
+                  </Button>
+                  
+                  <AnimatePresence>
+                    {showQrCode && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -5, scale: 0.95 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -5, scale: 0.95 }}
+                        transition={{ duration: 0.15 }}
+                        className="absolute top-full left-0 mt-2 p-3 bg-white rounded-xl shadow-xl z-50 border border-gray-100"
+                      >
+                        <QRCodeSVG value={`${window.location.origin}/?joinCode=${room.code}`} size={120} level="M" />
+                        <p className="text-center text-xs text-gray-500 mt-2">扫一扫，快速加入</p>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
               <span className="status-pill">
                 状态：
