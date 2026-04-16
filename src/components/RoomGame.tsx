@@ -749,7 +749,25 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
           <article className="panel">
             <h2>房间信息</h2>
             <div className="status-row">
-              <span className="status-pill">邀请码：{room.code}</span>
+              <div className="status-pill-group flex items-center gap-2">
+                <span className="status-pill">邀请码：{room.code}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => {
+                    const shareUrl = `${window.location.origin}/?joinCode=${room.code}`;
+                    navigator.clipboard.writeText(shareUrl).then(() => {
+                      roomLogic.setMessage("邀请链接已复制，快去分享给好友吧！");
+                    }).catch(() => {
+                      roomLogic.setError("复制失败，请手动分享邀请码。");
+                    });
+                  }}
+                >
+                  一键分享链接
+                </Button>
+              </div>
               <span className="status-pill">
                 状态：
                 {room.status === "lobby" ? "大厅" : room.status === "playing" ? "游戏中" : room.status === "voting" ? "投票中" : "结束"}

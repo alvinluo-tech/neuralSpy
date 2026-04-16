@@ -205,12 +205,40 @@ export default function HomePage() {
   useEffect(() => {
     if (entryMode !== "join") return;
     const firstEmptyIndex = joinCodeSlots.findIndex((char) => !char);
-    const targetIndex = firstEmptyIndex === -1 ? INVITE_CODE_LENGTH - 1 : firstEmptyIndex;
+    if (firstEmptyIndex === -1) {
+      // Code is fully pre-filled, focus the nickname input instead
+      const nicknameInput = document.getElementById("join-nickname-input");
+      if (nicknameInput) {
+        const timer = window.setTimeout(() => nicknameInput.focus(), 0);
+        return () => window.clearTimeout(timer);
+      }
+      return;
+    }
+    const targetIndex = firstEmptyIndex;
     const timer = window.setTimeout(() => focusJoinCodeInput(targetIndex), 0);
     return () => window.clearTimeout(timer);
   }, [entryMode, joinCodeSlots]);
 
   useTrackPage("/", "Home - Entry", !!sessionId);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      const codeParam = urlParams.get("joinCode");
+      if (codeParam) {
+        const cleaned = codeParam.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, INVITE_CODE_LENGTH);
+        if (cleaned.length > 0) {
+          const newSlots = Array.from({ length: INVITE_CODE_LENGTH }, (_, i) => cleaned[i] || "");
+          setJoinCodeSlots(newSlots);
+          setEntryMode("join");
+          
+          // clean up URL to avoid confusion if user refreshes later
+          const newUrl = window.location.pathname;
+          window.history.replaceState({}, "", newUrl);
+        }
+      }
+    }
+  }, []);
 
   // Initialize session
   useEffect(() => {
@@ -673,6 +701,7 @@ export default function HomePage() {
               <label>
                 你的昵称
                 <input
+                  id="join-nickname-input"
                   type="text"
                   value={nickname}
                   onChange={(event) => setNickname(event.target.value)}
