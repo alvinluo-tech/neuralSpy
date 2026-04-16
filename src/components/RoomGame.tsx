@@ -535,7 +535,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
   const selectedModelProfile = GROQ_MODEL_PROFILES.find((item) => item.value === effectiveModel) ?? GROQ_MODEL_PROFILES[0];
   const forcedExitNotice =
     room && sessionId && players.length > 0 && !players.some((player) => player.session_id === sessionId)
-      ? "你已被房主移出房间，正在返回大厅。"
+      ? "你已被房主移出房间，正在返回首页。"
       : "";
 
   useEffect(() => {
