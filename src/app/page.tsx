@@ -385,13 +385,14 @@ export default function HomePage() {
     setMessage("");
 
     try {
-      const roomRes = await supabase.from("rooms").select("id, code").eq("code", code).single();
+      const roomRes = await supabase.from("rooms").select("id, code, status").eq("code", code).single();
 
       if (roomRes.error || !roomRes.data) {
         throw new Error("房间不存在，请检查邀请码。");
       }
 
       const targetRoomId = roomRes.data.id as string;
+      const roomStatus = roomRes.data.status as string;
 
       const playersRes = await supabase.from("players").select("session_id, name").eq("room_id", targetRoomId);
 
@@ -420,6 +421,9 @@ export default function HomePage() {
       }
 
       if (!existing.data) {
+        if (roomStatus !== "lobby") {
+          throw new Error("该房间已开始游戏，无法加入新玩家。");
+        }
         const maxSeat = await supabase
           .from("players")
           .select("seat_no")
