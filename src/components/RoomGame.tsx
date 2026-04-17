@@ -776,7 +776,6 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                       if (navigator.share) {
                         navigator.share({
                           title: '谁是卧底',
-                          text: `邀请你加入谁是卧底房间，邀请码：${room.code}`,
                           url: shareUrl,
                         }).catch((err) => {
                           // User cancelled or share failed, fallback to clipboard
