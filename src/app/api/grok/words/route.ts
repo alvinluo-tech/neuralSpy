@@ -335,7 +335,7 @@ function checkIpRateLimit(ip: string): boolean {
 
 export async function POST(request: NextRequest) {
   // 静默限流：获取客户端 IP
-  const ip = request.ip ?? request.headers.get("x-forwarded-for") ?? "unknown";
+  const ip = request.headers.get("x-forwarded-for") ?? "unknown";
   if (ip !== "unknown" && !checkIpRateLimit(ip)) {
     return NextResponse.json(
       { error: "Too Many Requests. Please try again later." },
