@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { detectWinnerByRole, validateAndAssignRoles } from "@/lib/gameEngine";
 import { trackEvent } from "@/lib/umami";
+import { checkClientRateLimit } from "@/lib/clientRateLimit";
 import type { Category, Subcategory } from "./useCategorySearch";
 import type { RoomRow, PlayerRow } from "./useRoomData";
 
@@ -184,6 +185,11 @@ export const useRoomLogic = (
       if (players.length < 3) {
         setError("当前人数不足 3 人，无法开局。");
         return { success: false, message: "至少 3 人才能开局" };
+      }
+
+      if (!checkClientRateLimit("startRound", 3, 60000)) {
+        setError("开局过于频繁，请稍候再试。");
+        return { success: false, message: "限流触发" };
       }
 
       setBusy(true);

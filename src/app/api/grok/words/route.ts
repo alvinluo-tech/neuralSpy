@@ -311,7 +311,38 @@ const parseJsonFromContent = (content: string): GrokPair[] => {
   return [];
 };
 
+// 简易的内存 IP 限流字典 (适用于 Serverless 单实例级别的基础防护)
+const ipRateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const IP_LIMIT_MAX = 5; // 限制每个 IP 每分钟 5 次请求
+const IP_LIMIT_WINDOW_MS = 60 * 1000;
+
+function checkIpRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const record = ipRateLimitMap.get(ip);
+
+  if (!record || now > record.resetTime) {
+    ipRateLimitMap.set(ip, { count: 1, resetTime: now + IP_LIMIT_WINDOW_MS });
+    return true;
+  }
+
+  if (record.count >= IP_LIMIT_MAX) {
+    return false;
+  }
+
+  record.count += 1;
+  return true;
+}
+
 export async function POST(request: NextRequest) {
+  // 静默限流：获取客户端 IP
+  const ip = request.ip ?? request.headers.get("x-forwarded-for") ?? "unknown";
+  if (ip !== "unknown" && !checkIpRateLimit(ip)) {
+    return NextResponse.json(
+      { error: "Too Many Requests. Please try again later." },
+      { status: 429 }
+    );
+  }
+
   const body = (await request.json()) as {
     category?: string;
     excludedPairs?: string[];

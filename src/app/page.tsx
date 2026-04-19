@@ -9,6 +9,7 @@ import { useTrackPage } from "@/hooks/useTrackPage";
 import { Button } from "@/components/ui/button";
 import { NoticeToast } from "@/components/ui/notice-toast";
 import { identifySession, trackEvent } from "@/lib/umami";
+import { checkClientRateLimit } from "@/lib/clientRateLimit";
 
 const SESSION_KEY = "undercover.session.id";
 const PLAYER_NICKNAME_KEY = "undercover.lastNickname";
@@ -296,6 +297,11 @@ export default function HomePage() {
       return;
     }
 
+    if (!checkClientRateLimit("createRoom", 5, 60000)) {
+      setError("操作过于频繁，请稍后再试。");
+      return;
+    }
+
     setBusy(true);
     setError("");
     setMessage("");
@@ -377,6 +383,11 @@ export default function HomePage() {
 
     if (code.length !== INVITE_CODE_LENGTH) {
       setError("请输入 6 位邀请码。");
+      return;
+    }
+
+    if (!checkClientRateLimit("joinRoom", 10, 60000)) {
+      setError("操作过于频繁，请稍后再试。");
       return;
     }
 
