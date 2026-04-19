@@ -15,6 +15,9 @@ const SESSION_KEY = "undercover.session.id";
 const PLAYER_NICKNAME_KEY = "undercover.lastNickname";
 const PLAYER_SESSION_STARTED_TRACK_PREFIX = "undercover.player.session.started.tracked.";
 const INVITE_CODE_LENGTH = 6;
+const MIN_ROOM_PLAYERS = 3;
+const MAX_ROOM_PLAYERS = 12;
+const DEFAULT_ROOM_MAX_PLAYERS = 6;
 const randomCode = () => {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
@@ -75,6 +78,8 @@ export default function HomePage() {
   );
   const [createCategory, setCreateCategory] = useState("游戏");
   const [createUndercoverCount, setCreateUndercoverCount] = useState(1);
+  const [createMaxPlayers, setCreateMaxPlayers] = useState(DEFAULT_ROOM_MAX_PLAYERS);
+  const [createIsPublic, setCreateIsPublic] = useState(false);
   const [createVoteEnabled, setCreateVoteEnabled] = useState(true);
   const [createVoteDurationSeconds, setCreateVoteDurationSeconds] = useState(60);
   const [categorySearchOpen, setCategorySearchOpen] = useState(false);
@@ -94,6 +99,8 @@ export default function HomePage() {
   const isCreateReady =
     trimmedNickname.length > 0 &&
     createCategory.trim().length > 0 &&
+    createMaxPlayers >= MIN_ROOM_PLAYERS &&
+    createMaxPlayers <= MAX_ROOM_PLAYERS &&
     (!createVoteEnabled || normalizeVoteDurationSeconds(createVoteDurationSeconds) >= 0);
   const isJoinReady = trimmedNickname.length > 0 && joinCode.length === INVITE_CODE_LENGTH;
 
@@ -227,12 +234,29 @@ export default function HomePage() {
     if (typeof window !== "undefined") {
       const urlParams = new URLSearchParams(window.location.search);
       const codeParam = urlParams.get("joinCode");
+      const modeParam = urlParams.get("mode");
+      const publicParam = urlParams.get("public");
+      let shouldCleanUrl = false;
+
+      if (modeParam === "create") {
+        setEntryMode("create");
+        setCreateIsPublic(publicParam === "1");
+        shouldCleanUrl = true;
+      }
+
+      if (modeParam === "join") {
+        resetJoinCodeSlots();
+        setEntryMode("join");
+        shouldCleanUrl = true;
+      }
+
       if (codeParam) {
         const cleaned = codeParam.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, INVITE_CODE_LENGTH);
         if (cleaned.length > 0) {
           const newSlots = Array.from({ length: INVITE_CODE_LENGTH }, (_, i) => cleaned[i] || "");
           setJoinCodeSlots(newSlots);
           setEntryMode("join");
+          shouldCleanUrl = true;
           
           supabase
             .from("rooms")
@@ -247,10 +271,12 @@ export default function HomePage() {
               }
             });
           
-          // clean up URL to avoid confusion if user refreshes later
-          const newUrl = window.location.pathname;
-          window.history.replaceState({}, "", newUrl);
         }
+      }
+
+      if (shouldCleanUrl) {
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, "", newUrl);
       }
     }
   }, []);
@@ -297,6 +323,11 @@ export default function HomePage() {
       return;
     }
 
+    if (!Number.isFinite(createMaxPlayers) || createMaxPlayers < MIN_ROOM_PLAYERS || createMaxPlayers > MAX_ROOM_PLAYERS) {
+      setError(`最大人数必须在 ${MIN_ROOM_PLAYERS}-${MAX_ROOM_PLAYERS} 之间。`);
+      return;
+    }
+
     if (!checkClientRateLimit("createRoom", 5, 60000)) {
       setError("操作过于频繁，请稍后再试。");
       return;
@@ -319,6 +350,8 @@ export default function HomePage() {
             status: "lobby",
             category: createCategory.trim() || "日常",
             undercover_count: clamp(createUndercoverCount, 1, 3),
+            max_players: clamp(createMaxPlayers, MIN_ROOM_PLAYERS, MAX_ROOM_PLAYERS),
+            is_public: createIsPublic,
             vote_enabled: createVoteEnabled,
             round_number: 0,
             vote_round: 1,
@@ -396,7 +429,7 @@ export default function HomePage() {
     setMessage("");
 
     try {
-      const roomRes = await supabase.from("rooms").select("id, code, status").eq("code", code).single();
+      const roomRes = await supabase.from("rooms").select("id, code, status, max_players").eq("code", code).single();
 
       if (roomRes.error || !roomRes.data) {
         throw new Error("房间不存在，请检查邀请码。");
@@ -404,12 +437,18 @@ export default function HomePage() {
 
       const targetRoomId = roomRes.data.id as string;
       const roomStatus = roomRes.data.status as string;
+      const maxPlayers =
+        typeof (roomRes.data as { max_players?: unknown }).max_players === "number"
+          ? ((roomRes.data as { max_players: number }).max_players ?? DEFAULT_ROOM_MAX_PLAYERS)
+          : DEFAULT_ROOM_MAX_PLAYERS;
 
       const playersRes = await supabase.from("players").select("session_id, name").eq("room_id", targetRoomId);
 
       if (playersRes.error) {
         throw new Error(playersRes.error.message);
       }
+
+      const currentPlayersCount = (playersRes.data ?? []).length;
 
       const normalizedInputName = trimmedNickname.toLowerCase();
       const duplicatedPlayer = (playersRes.data ?? []).find(
@@ -435,6 +474,11 @@ export default function HomePage() {
         if (roomStatus === "playing" || roomStatus === "voting") {
           throw new Error("该房间已开始游戏，请等本局结束后再加入新玩家。");
         }
+
+        if (currentPlayersCount >= maxPlayers) {
+          throw new Error("房间人数已满，无法加入。");
+        }
+
         const maxSeat = await supabase
           .from("players")
           .select("seat_no")
@@ -487,6 +531,27 @@ export default function HomePage() {
   return (
     <div className="page-shell">
       <main className="app-wrap aceternity-stage">
+        <section className="panel" style={{ padding: 14 }}>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <div className="text-sm tracking-[0.14em] uppercase text-[color:var(--primary)] font-bold">
+                Community
+              </div>
+              <div className="text-sm text-[color:var(--muted)] mt-1">想快速加入路人的房间？去社区大厅看看。</div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                trackEvent("home_go_community_clicked");
+                router.push("/community");
+              }}
+            >
+              去社区大厅
+            </Button>
+          </div>
+        </section>
+
         <motion.section
           className="hero-card hero-card--lift acet-spotlight"
           initial={{ opacity: 0, y: 14 }}
@@ -542,7 +607,10 @@ export default function HomePage() {
                 variant="primary"
                 size="lg"
                 className="main-next-action"
-                onClick={() => setEntryMode("create")}
+                onClick={() => {
+                  setCreateIsPublic(false);
+                  setEntryMode("create");
+                }}
               >
                 我来创建
               </Button>
@@ -671,6 +739,27 @@ export default function HomePage() {
                   value={createUndercoverCount}
                   onChange={(event) => setCreateUndercoverCount(clamp(Number(event.target.value) || 1, 1, 3))}
                 />
+              </label>
+              <label>
+                最大人数（{MIN_ROOM_PLAYERS}-{MAX_ROOM_PLAYERS}）
+                <input
+                  type="number"
+                  min={MIN_ROOM_PLAYERS}
+                  max={MAX_ROOM_PLAYERS}
+                  value={createMaxPlayers}
+                  onChange={(event) =>
+                    setCreateMaxPlayers(clamp(Number(event.target.value) || DEFAULT_ROOM_MAX_PLAYERS, MIN_ROOM_PLAYERS, MAX_ROOM_PLAYERS))
+                  }
+                />
+                <p className="hint">满员后不可加入新玩家；建议 6-10 人体验更佳。</p>
+              </label>
+              <label className="check-line">
+                <input
+                  type="checkbox"
+                  checked={createIsPublic}
+                  onChange={(event) => setCreateIsPublic(event.target.checked)}
+                />
+                公开到社区大厅
               </label>
               <label className="check-line">
                 <input
