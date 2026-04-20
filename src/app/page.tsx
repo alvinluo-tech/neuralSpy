@@ -10,29 +10,20 @@ import { Button } from "@/components/ui/button";
 import { NoticeToast } from "@/components/ui/notice-toast";
 import { identifySession, trackEvent } from "@/lib/umami";
 import { checkClientRateLimit } from "@/lib/clientRateLimit";
+import { CreateRoomForm, type CreateRoomData } from "@/components/rooms/CreateRoomForm";
+import { JoinRoomForm, INVITE_CODE_LENGTH } from "@/components/rooms/JoinRoomForm";
+import { MIN_ROOM_PLAYERS, MAX_ROOM_PLAYERS, DEFAULT_ROOM_MAX_PLAYERS } from "@/lib/constants";
+import { clamp } from "@/lib/utils";
 
 const SESSION_KEY = "undercover.session.id";
 const PLAYER_NICKNAME_KEY = "undercover.lastNickname";
 const PLAYER_SESSION_STARTED_TRACK_PREFIX = "undercover.player.session.started.tracked.";
-const INVITE_CODE_LENGTH = 6;
-const MIN_ROOM_PLAYERS = 3;
-const MAX_ROOM_PLAYERS = 12;
-const DEFAULT_ROOM_MAX_PLAYERS = 6;
 const randomCode = () => {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   return Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
 };
 const randomSessionId = () => {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-};
-const clamp = (value: number, min: number, max: number) => {
-  return Math.min(Math.max(value, min), max);
-};
-
-const normalizeVoteDurationSeconds = (value: number) => {
-  if (!Number.isFinite(value)) return 60;
-  const normalized = Math.trunc(value);
-  return normalized >= 0 ? normalized : 0;
 };
 
 const safeGetSessionValue = (key: string) => {
@@ -73,35 +64,16 @@ export default function HomePage() {
   const [sessionId, setSessionId] = useState("");
   const [entryMode, setEntryMode] = useState<EntryMode | null>(null);
   const [nickname, setNickname] = useState("");
+  const [createIsPublic, setCreateIsPublic] = useState(false);
   const [joinCodeSlots, setJoinCodeSlots] = useState<string[]>(() =>
     Array.from({ length: INVITE_CODE_LENGTH }, () => "")
   );
-  const [createCategory, setCreateCategory] = useState("游戏");
-  const [createUndercoverCount, setCreateUndercoverCount] = useState(1);
-  const [createMaxPlayers, setCreateMaxPlayers] = useState(DEFAULT_ROOM_MAX_PLAYERS);
-  const [createIsPublic, setCreateIsPublic] = useState(false);
-  const [createVoteEnabled, setCreateVoteEnabled] = useState(true);
-  const [createVoteDurationSeconds, setCreateVoteDurationSeconds] = useState(60);
-  const [categorySearchOpen, setCategorySearchOpen] = useState(false);
-  const [categorySearchQuery, setCategorySearchQuery] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Use category search hook
-  const { buildCategorySuggestions } = useCategorySearch();
-  const categorySuggestions = useMemo(
-    () => buildCategorySuggestions(categorySearchQuery),
-    [buildCategorySuggestions, categorySearchQuery],
-  );
   const joinCode = joinCodeSlots.join("");
   const trimmedNickname = nickname.trim();
-  const isCreateReady =
-    trimmedNickname.length > 0 &&
-    createCategory.trim().length > 0 &&
-    createMaxPlayers >= MIN_ROOM_PLAYERS &&
-    createMaxPlayers <= MAX_ROOM_PLAYERS &&
-    (!createVoteEnabled || normalizeVoteDurationSeconds(createVoteDurationSeconds) >= 0);
   const isJoinReady = trimmedNickname.length > 0 && joinCode.length === INVITE_CODE_LENGTH;
 
   let flowModeLabel = "未选择";
@@ -114,12 +86,6 @@ export default function HomePage() {
     flowCompletedStep = 1;
     flowCurrentStep = 2;
     flowNextAction = "填写昵称与规则后，点击“创建房间”。";
-
-    if (isCreateReady) {
-      flowCompletedStep = 2;
-      flowCurrentStep = 3;
-      flowNextAction = "信息已就绪，点击“创建房间”进入大厅。";
-    }
   } else if (entryMode === "join") {
     flowModeLabel = "加入模式";
     flowCompletedStep = 1;
@@ -316,15 +282,12 @@ export default function HomePage() {
     safeSetSessionValue(sessionStartKey, "1");
   }, [sessionId, nickname]);
 
-  const createRoom = async () => {
+  const handleCreateSubmit = async (data: CreateRoomData) => {
     if (!sessionId) return;
-    if (!nickname.trim()) {
-      setError("请先输入你的昵称。");
-      return;
-    }
+    const trimmedNickname = data.nickname.trim();
 
-    if (!Number.isFinite(createMaxPlayers) || createMaxPlayers < MIN_ROOM_PLAYERS || createMaxPlayers > MAX_ROOM_PLAYERS) {
-      setError(`最大人数必须在 ${MIN_ROOM_PLAYERS}-${MAX_ROOM_PLAYERS} 之间。`);
+    if (!trimmedNickname) {
+      setError("请先输入你的昵称。");
       return;
     }
 
@@ -348,14 +311,14 @@ export default function HomePage() {
             code,
             host_session_id: sessionId,
             status: "lobby",
-            category: createCategory.trim() || "日常",
-            undercover_count: clamp(createUndercoverCount, 1, 3),
-            max_players: clamp(createMaxPlayers, MIN_ROOM_PLAYERS, MAX_ROOM_PLAYERS),
-            is_public: createIsPublic,
-            vote_enabled: createVoteEnabled,
+            category: data.category.trim() || "日常",
+            undercover_count: data.undercoverCount,
+            max_players: data.maxPlayers,
+            is_public: data.isPublic,
+            vote_enabled: data.voteEnabled,
             round_number: 0,
             vote_round: 1,
-            vote_duration_seconds: normalizeVoteDurationSeconds(createVoteDurationSeconds),
+            vote_duration_seconds: data.voteDurationSeconds,
             vote_started_at: null,
             vote_deadline_at: null,
             vote_candidate_ids: null,
@@ -379,7 +342,7 @@ export default function HomePage() {
       const hostInsert = await supabase.from("players").insert({
         room_id: createdRoom.id,
         session_id: sessionId,
-        name: nickname.trim(),
+        name: trimmedNickname,
         seat_no: 1,
         is_undercover: false,
         is_alive: true,
@@ -389,33 +352,33 @@ export default function HomePage() {
         throw new Error(hostInsert.error.message);
       }
 
-      safeSetSessionValue(PLAYER_NICKNAME_KEY, nickname.trim());
+      safeSetSessionValue(PLAYER_NICKNAME_KEY, trimmedNickname);
+      setNickname(trimmedNickname); // update local state
       trackEvent("room_created", { roomCode: createdRoom.code });
       router.push(`/room/${createdRoom.id}/lobby`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建房间失败");
-    } finally {
       setBusy(false);
     }
   };
 
-  const joinRoom = async () => {
+  const handleJoinSubmit = async (submitNickname: string, submitCode: string) => {
     if (!sessionId) return;
-    const trimmedNickname = nickname.trim();
+    const trimmedNickname = submitNickname.trim();
 
     if (!trimmedNickname) {
       setError("请先输入你的昵称。");
       return;
     }
 
-    const code = joinCode.trim().toUpperCase();
+    const code = submitCode.trim().toUpperCase();
     if (!code) {
       setError("请输入房间邀请码。");
       return;
     }
 
     if (code.length !== INVITE_CODE_LENGTH) {
-      setError("请输入 6 位邀请码。");
+      setError(`请输入 ${INVITE_CODE_LENGTH} 位邀请码。`);
       return;
     }
 
@@ -507,14 +470,15 @@ export default function HomePage() {
       }
 
       safeSetSessionValue(PLAYER_NICKNAME_KEY, trimmedNickname);
+      setNickname(trimmedNickname); // update local state
       trackEvent("room_joined", { roomCode: code });
       router.push(`/room/${targetRoomId}/lobby`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "加入房间失败");
-    } finally {
       setBusy(false);
     }
   };
+
 
   if (!sessionId) {
     return (
@@ -638,237 +602,23 @@ export default function HomePage() {
         )}
 
         {entryMode === "create" && (
-          <section className="panel-grid entry-grid entry-single-grid">
-            <article className="panel">
-              <div className="entry-form-head">
-                <h2>创建房间</h2>
-                <Button type="button" variant="ghost" onClick={() => setEntryMode(null)}>
-                  返回选择
-                </Button>
-              </div>
-
-              <label>
-                你的昵称
-                <input
-                  type="text"
-                  value={nickname}
-                  onChange={(event) => setNickname(event.target.value)}
-                  placeholder="例如：Alex"
-                />
-              </label>
-              <label>
-                本局类别
-                <div
-                  className="category-picker"
-                  onBlur={() => {
-                    window.setTimeout(() => setCategorySearchOpen(false), 120);
-                  }}
-                >
-                  <input
-                    type="text"
-                    className="category-picker-input"
-                    value={categorySearchQuery}
-                    onChange={(event) => {
-                      setCategorySearchQuery(event.target.value);
-                      setCreateCategory(event.target.value.trim() || createCategory);
-                    }}
-                    onFocus={() => setCategorySearchOpen(true)}
-                    placeholder="搜索分类..."
-                  />
-                  {categorySearchOpen && (
-                    <div className="category-menu">
-                      <div className="category-menu-header">
-                        {categorySearchQuery.trim() ? "模糊匹配结果" : "Top10 热门种类词"}
-                      </div>
-
-                      {categorySuggestions.length === 0 && categorySearchQuery.trim() ? (
-                        <div className="category-empty">
-                          没有匹配结果，继续输入可自定义类别。
-                        </div>
-                      ) : (
-                        categorySuggestions.map((item) => (
-                          <Button
-                            key={item.key}
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className={`category-option${createCategory === item.subcategoryDisplayName ? " active" : ""}`}
-                            onClick={() => {
-                              setCreateCategory(item.subcategoryDisplayName);
-                              setCategorySearchQuery(item.subcategoryDisplayName);
-                              setCategorySearchOpen(false);
-                            }}
-                          >
-                            <div className="category-option-title">{item.subcategoryDisplayName}</div>
-                            <div className="category-option-meta">
-                              {item.categoryDisplayName}
-                              {item.examples.length > 0 ? ` · 例：${item.examples.join(" vs ")}` : ""}
-                              {item.usageCount > 0 ? ` · 热度 ${item.usageCount}` : ""}
-                            </div>
-                          </Button>
-                        ))
-                      )}
-
-                      {categorySearchQuery.trim() && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="category-option custom"
-                          onClick={() => {
-                            setCreateCategory(categorySearchQuery.trim());
-                            setCategorySearchOpen(false);
-                          }}
-                        >
-                          使用“{categorySearchQuery.trim()}”作为自定义类别
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                </div>
-                <p className="category-current">
-                  当前选择：<strong>{createCategory || "未选择"}</strong>
-                </p>
-              </label>
-              <label>
-                卧底人数（开局时随机分配）
-                <input
-                  type="number"
-                  min={1}
-                  max={3}
-                  value={createUndercoverCount}
-                  onChange={(event) => setCreateUndercoverCount(clamp(Number(event.target.value) || 1, 1, 3))}
-                />
-              </label>
-              <label>
-                最大人数（{MIN_ROOM_PLAYERS}-{MAX_ROOM_PLAYERS}）
-                <input
-                  type="number"
-                  min={MIN_ROOM_PLAYERS}
-                  max={MAX_ROOM_PLAYERS}
-                  value={createMaxPlayers}
-                  onChange={(event) =>
-                    setCreateMaxPlayers(clamp(Number(event.target.value) || DEFAULT_ROOM_MAX_PLAYERS, MIN_ROOM_PLAYERS, MAX_ROOM_PLAYERS))
-                  }
-                />
-                <p className="hint">满员后不可加入新玩家；建议 6-10 人体验更佳。</p>
-              </label>
-              <label className="check-line">
-                <input
-                  type="checkbox"
-                  checked={createIsPublic}
-                  onChange={(event) => setCreateIsPublic(event.target.checked)}
-                />
-                公开到社区大厅
-              </label>
-              <label className="check-line">
-                <input
-                  type="checkbox"
-                  checked={createVoteEnabled}
-                  onChange={(event) => setCreateVoteEnabled(event.target.checked)}
-                />
-                启用投票功能
-              </label>
-              <AnimatePresence initial={false}>
-                {createVoteEnabled && (
-                  <motion.div
-                    key="vote-duration-field"
-                    initial={{ opacity: 0, y: -8, height: 0 }}
-                    animate={{ opacity: 1, y: 0, height: "auto" }}
-                    exit={{ opacity: 0, y: -8, height: 0 }}
-                    transition={{ duration: 0.2, ease: "easeOut" }}
-                    className="motion-collapse"
-                  >
-                    <label>
-                      每轮投票限时（秒）
-                      <input
-                        type="number"
-                        min={0}
-                        value={createVoteDurationSeconds}
-                        onChange={(event) =>
-                          setCreateVoteDurationSeconds(normalizeVoteDurationSeconds(Number(event.target.value)))
-                        }
-                      />
-                    </label>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-              <Button
-                type="button"
-                variant="primary"
-                className={busy ? "loading" : undefined}
-                onClick={createRoom}
-                disabled={busy}
-              >
-                {busy ? "处理中..." : "创建房间"}
-              </Button>
-            </article>
-          </section>
+          <CreateRoomForm
+            initialNickname={nickname}
+            initialIsPublic={createIsPublic}
+            busy={busy}
+            onCancel={() => setEntryMode(null)}
+            onSubmit={handleCreateSubmit}
+          />
         )}
 
         {entryMode === "join" && (
-          <div
-            className="join-drawer-overlay"
-            onClick={() => {
-              if (busy) return;
-              setEntryMode(null);
-            }}
-          >
-            <section className="join-drawer" onClick={(event) => event.stopPropagation()}>
-              <div className="join-drawer-handle" aria-hidden="true" />
-              <div className="entry-form-head">
-                <h2>加入房间</h2>
-                <Button type="button" variant="ghost" onClick={() => setEntryMode(null)} disabled={busy}>
-                  返回
-                </Button>
-              </div>
-
-              <label>
-                你的昵称
-                <input
-                  id="join-nickname-input"
-                  type="text"
-                  value={nickname}
-                  onChange={(event) => setNickname(event.target.value)}
-                  placeholder="例如：Bella"
-                />
-              </label>
-
-              <label>
-                邀请码
-                <div className="invite-code-grid" onPaste={handleJoinCodePaste}>
-                  {joinCodeSlots.map((char, index) => (
-                    <input
-                      key={`invite-slot-${index}`}
-                      ref={(element) => {
-                        joinCodeInputRefs.current[index] = element;
-                      }}
-                      type="text"
-                      className={`invite-code-cell${char ? " filled" : ""}`}
-                      inputMode="text"
-                      autoComplete="one-time-code"
-                      maxLength={1}
-                      value={char}
-                      onChange={(event) => handleJoinCodeInput(index, event.target.value)}
-                      onKeyDown={(event) => handleJoinCodeKeyDown(index, event)}
-                      aria-label={`邀请码第 ${index + 1} 位`}
-                    />
-                  ))}
-                </div>
-                <p className="hint">请输入 6 位邀请码（字母或数字）。</p>
-              </label>
-
-              <Button
-                type="button"
-                variant="primary"
-                className={busy ? "loading" : undefined}
-                onClick={joinRoom}
-                disabled={busy}
-              >
-                {busy ? "处理中..." : "加入房间"}
-              </Button>
-            </section>
-          </div>
+          <JoinRoomForm
+            initialNickname={nickname}
+            initialJoinCodeSlots={joinCodeSlots}
+            busy={busy}
+            onCancel={() => setEntryMode(null)}
+            onSubmit={handleJoinSubmit}
+          />
         )}
 
         <div className="notice-toast-stack">
