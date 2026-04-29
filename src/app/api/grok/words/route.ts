@@ -28,10 +28,13 @@ const MODEL_EVENT_PREFIX_ALIASES: Record<string, string> = {
   AI_Word_Generation_Success: "AIWG_Success",
 };
 
-const normalizeProvider = (value: string | undefined): "groq" | null => {
+const normalizeProvider = (value: string | undefined): "groq" | "grok" | null => {
   const normalized = value?.trim().toLowerCase();
   if (normalized === "groq") {
     return "groq";
+  }
+  if (normalized === "grok" || normalized === "xai") {
+    return "grok";
   }
 
   return null;
@@ -313,7 +316,7 @@ const parseJsonFromContent = (content: string): GrokPair[] => {
 
 // 简易的内存 IP 限流字典 (适用于 Serverless 单实例级别的基础防护)
 const ipRateLimitMap = new Map<string, { count: number; resetTime: number }>();
-const IP_LIMIT_MAX = 5; // 限制每个 IP 每分钟 5 次请求
+const IP_LIMIT_MAX = 20; // 限制每个 IP 每分钟 20 次请求
 const IP_LIMIT_WINDOW_MS = 60 * 1000;
 
 function checkIpRateLimit(ip: string): boolean {
@@ -357,31 +360,36 @@ export async function POST(request: NextRequest) {
     : [];
 
   const requestedModel = body.model?.trim();
-  const defaultModel = process.env.GROQ_MODEL ?? "qwen/qwen3-32b";
-  const model = requestedModel && requestedModel.length > 0
-    ? requestedModel.slice(0, 120)
-    : defaultModel;
+  const defaultGroqModel = process.env.GROQ_MODEL ?? "qwen/qwen3-32b";
+  const defaultGrokModel = process.env.GROK_MODEL ?? "grok-4-1-fast";
 
-  const requestedProvider = normalizeProvider(body.provider);
-  if (body.provider && !requestedProvider) {
+  const defaultProvider = normalizeProvider(process.env.WORDS_AI_PROVIDER) ?? "grok";
+  const requestedProvider = normalizeProvider(body.provider) ?? defaultProvider;
+  if (body.provider && requestedProvider !== "groq" && requestedProvider !== "grok") {
     return NextResponse.json(
       {
-        error: "当前仅支持 Groq provider，暂不支持该 provider。",
+        error: "当前仅支持 Groq 和 Grok provider，暂不支持该 provider。",
         provider: (body.provider ?? "").trim().toLowerCase() || "unknown",
-        model,
+        model: requestedModel || "unknown",
       },
       { status: 400 },
     );
   }
 
-  const apiKey = process.env.GROQ_API_KEY;
-  const apiUrl = process.env.GROQ_API_URL ?? "https://api.groq.com/openai/v1/chat/completions";
+  const model = requestedModel && requestedModel.length > 0
+    ? requestedModel.slice(0, 120)
+    : (requestedProvider === "grok" ? defaultGrokModel : defaultGroqModel);
+
+  const apiKey = requestedProvider === "grok" ? process.env.GROK_API_KEY : process.env.GROQ_API_KEY;
+  const apiUrl = requestedProvider === "grok" 
+    ? (process.env.GROK_API_URL ?? "https://api.x.ai/v1/chat/completions")
+    : (process.env.GROQ_API_URL ?? "https://api.groq.com/openai/v1/chat/completions");
 
   if (!apiKey) {
     return NextResponse.json(
       {
-        error: "缺少 GROQ_API_KEY，请先在环境变量中配置。",
-        provider: "groq",
+        error: `缺少 ${requestedProvider === "grok" ? "GROK_API_KEY" : "GROQ_API_KEY"}，请先在环境变量中配置。`,
+        provider: requestedProvider,
         model,
       },
       { status: 400 },
@@ -429,8 +437,8 @@ export async function POST(request: NextRequest) {
       const errorText = await response.text();
       return NextResponse.json(
         {
-          error: `Groq 请求失败（${response.status}）：${errorText.slice(0, 300)}`,
-          provider: "groq",
+          error: `${requestedProvider} 请求失败（${response.status}）：${errorText.slice(0, 300)}`,
+          provider: requestedProvider,
           model,
         },
         { status: 502 },
@@ -449,8 +457,8 @@ export async function POST(request: NextRequest) {
     if (pairs.length === 0) {
       return NextResponse.json(
         {
-          error: "Groq 未返回可用词条，请重试。",
-          provider: "groq",
+          error: `${requestedProvider} 未返回可用词条，请重试。`,
+          provider: requestedProvider,
           model,
         },
         { status: 502 },
@@ -462,23 +470,23 @@ export async function POST(request: NextRequest) {
       {
         ...body.tracking,
         category,
-        provider: "groq",
+        provider: requestedProvider,
         model,
       },
-      "groq",
+      requestedProvider,
       model,
     );
 
     return NextResponse.json({
       pair: pairs[0],
-      provider: "groq",
+      provider: requestedProvider,
       model,
     });
   } catch (error) {
     return NextResponse.json(
       {
         error: `生成词条失败：${error instanceof Error ? error.message : "未知错误"}`,
-        provider: "groq",
+        provider: requestedProvider,
         model,
       },
       { status: 500 },

@@ -103,18 +103,25 @@ type GroqModelProfile = {
   scenario: string;
 };
 
-const GROQ_MODEL_PROFILES: GroqModelProfile[] = [
+const AI_MODEL_PROFILES: GroqModelProfile[] = [
   {
     priority: "P0",
+    value: "grok-4-1-fast",
+    label: "grok-4-1-fast (xAI)",
+    reason: "速度极快且聪明，官方推流最佳模型。",
+    scenario: "快节奏游戏 / 高频短句",
+  },
+  {
+    priority: "P1",
     value: "qwen/qwen3-32b",
-    label: "qwen/qwen3-32b",
+    label: "qwen/qwen3-32b (Groq)",
     reason: "中文理解能力强，语义细腻。",
     scenario: "默认生成引擎",
   },
   {
-    priority: "P1",
+    priority: "P2",
     value: "moonshotai/kimi-k2-instruct",
-    label: "moonshotai/kimi-k2-instruct",
+    label: "moonshotai/kimi-k2-instruct (Groq)",
     reason: "擅长中文细微差别与语感。",
     scenario: "高难度模式 / 文学分类",
   },
@@ -141,7 +148,7 @@ const GROQ_MODEL_PROFILES: GroqModelProfile[] = [
   },
 ];
 
-const DEFAULT_GROQ_MODEL = GROQ_MODEL_PROFILES[0].value;
+const DEFAULT_AI_MODEL = AI_MODEL_PROFILES[0].value;
 const AUTO_MODEL_VALUE = "__AUTO_RECOMMENDED_MODEL__";
 
 const LOBBY_STEPS = ["设置规则", "等待玩家", "开始游戏"] as const;
@@ -530,9 +537,9 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
     voteDurationDraftInputValue !== null &&
     (voteDurationDraft == null || voteDurationDraft !== currentVoteDuration);
   const roomCategorySuggestions = buildCategorySuggestions(roomCategoryInputValue);
-  const aiModelOptions = GROQ_MODEL_PROFILES;
-  const effectiveModel = selectedAiModel === AUTO_MODEL_VALUE ? DEFAULT_GROQ_MODEL : selectedAiModel || DEFAULT_GROQ_MODEL;
-  const selectedModelProfile = GROQ_MODEL_PROFILES.find((item) => item.value === effectiveModel) ?? GROQ_MODEL_PROFILES[0];
+  const aiModelOptions = AI_MODEL_PROFILES;
+  const effectiveModel = selectedAiModel === AUTO_MODEL_VALUE ? DEFAULT_AI_MODEL : selectedAiModel || DEFAULT_AI_MODEL;
+  const selectedModelProfile = AI_MODEL_PROFILES.find((item) => item.value === effectiveModel) ?? AI_MODEL_PROFILES[0];
   const forcedExitNotice =
     room && sessionId && players.length > 0 && !players.some((player) => player.session_id === sessionId)
       ? "你已被房主移出房间，正在返回首页。"
@@ -1073,7 +1080,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                       onChange={(event) => setSelectedAiModel(event.target.value)}
                       disabled={roomLogic.busy || room.status === "voting"}
                     >
-                      <option value={AUTO_MODEL_VALUE}>智能推荐（默认）· P0 · {DEFAULT_GROQ_MODEL}</option>
+                      <option value={AUTO_MODEL_VALUE}>智能推荐（默认）· P0 · {DEFAULT_AI_MODEL}</option>
                       {aiModelOptions.map((option) => (
                         <option key={option.value} value={option.value}>
                           {`${option.priority} · ${option.label}（手动指定）`}
@@ -1172,12 +1179,13 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                     type="button"
                     variant={room.status === "lobby" || !room.vote_enabled ? "primary" : "secondary"}
                     className={`${roomLogic.busy ? "loading " : ""}${room.status === "lobby" || !room.vote_enabled ? "main-next-action" : ""}`.trim() || undefined}
-                    onClick={() =>
+                    onClick={() => {
+                      const provider = effectiveModel.includes("grok") ? "grok" : "groq";
                       roomLogic.startRound(roomId, room.category, room.undercover_count, effectiveWhiteboardCount, categories, {
-                        provider: "groq",
+                        provider,
                         model: effectiveModel,
                       })
-                    }
+                    }}
                     disabled={roomLogic.busy || room.status === "voting"}
                   >
                     {roomLogic.busy

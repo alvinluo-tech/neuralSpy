@@ -73,8 +73,10 @@ body {
 
 .hero-title {
   margin: 10px 0 6px;
-  font-size: clamp(1.7rem, 4vw, 2.35rem);
-  line-height: 1.12;
+  font-size: clamp(2rem, 6vw, 2.75rem);
+  line-height: 1.1;
+  font-weight: 850;
+  letter-spacing: -0.01em;
 }
 
 .hero-subtitle {
@@ -87,6 +89,21 @@ body {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+@media (max-width: 639px) {
+  .panel-grid,
+  .entry-grid,
+  .room-grid,
+  .entry-choice-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .entry-option-card {
+    min-height: auto;
+    padding: 24px;
+  }
 }
 
 .entry-grid,
@@ -283,7 +300,8 @@ textarea {
   width: 100%;
   margin-top: 8px;
   border: 1px solid #cfd8cf;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(4px);
   border-radius: 12px;
   padding: 10px 12px;
   font: inherit;
@@ -308,6 +326,14 @@ button:focus {
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 480px) {
+  .inline-row > *,
+  .actions-row > * {
+    width: 100%;
+  }
 }
 
 .hint {
@@ -629,8 +655,16 @@ button:focus {
   margin: 10px 0 2px;
 }
 
-.room-category-editor input {
+.room-category-editor input,
+.room-category-editor select {
   margin-top: 0;
+  background: rgba(23, 76, 69, 0.05);
+  font-size: 16px; 
+}
+
+.room-category-editor select option {
+  background: #fdfdfc;
+  color: #1a1a1a;
 }
 
 .host-actions {

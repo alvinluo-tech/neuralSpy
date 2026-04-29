@@ -35,8 +35,8 @@ type GeneratedWordPair = {
   undercover: string;
 };
 
-type AiProvider = "groq";
-const DEFAULT_GROQ_MODEL = "qwen/qwen3-32b";
+type AiProvider = "groq" | "grok";
+const DEFAULT_AI_MODEL = "grok-4-1-fast";
 
 type AiFailureStage =
   | "network_error"
@@ -110,7 +110,7 @@ const trackAiEvent = (
     trackEvent(baseEventName, payload);
   }
 
-  const resolvedModel = model?.trim() || DEFAULT_GROQ_MODEL;
+  const resolvedModel = model?.trim() || DEFAULT_AI_MODEL;
 
   const providerToken = toEventToken(provider, "groq");
   const modelToken = toModelEventToken(resolvedModel);
@@ -187,7 +187,7 @@ export const useRoomLogic = (
         return { success: false, message: "至少 3 人才能开局" };
       }
 
-      if (!checkClientRateLimit("startRound", 3, 60000)) {
+      if (!checkClientRateLimit("startRound", 15, 60000)) {
         setError("开局过于频繁，请稍候再试。");
         return { success: false, message: "限流触发" };
       }
@@ -236,7 +236,7 @@ export const useRoomLogic = (
 
         let acceptedPair: { civilian: string; undercover: string } | null = null;
         let lastAttemptProvider = "groq";
-        let lastAttemptModel = DEFAULT_GROQ_MODEL;
+        let lastAttemptModel = DEFAULT_AI_MODEL;
 
         for (let attempt = 0; attempt < 6; attempt += 1) {
           const requestBody: {
@@ -265,7 +265,7 @@ export const useRoomLogic = (
           const requestedModel = aiOptions?.model?.trim();
           requestBody.model = requestedModel && requestedModel.length > 0
             ? requestedModel
-            : DEFAULT_GROQ_MODEL;
+            : DEFAULT_AI_MODEL;
 
           const requestProviderName = requestBody.provider ?? "groq";
           const requestModelName = requestBody.model;
