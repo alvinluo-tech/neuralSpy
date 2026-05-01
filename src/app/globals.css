@@ -1393,6 +1393,37 @@ button:focus {
   font-size: 1rem;
 }
 
+/* ---- Vote overlay ---- */
+.vote-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 17, 15, 0.55);
+  backdrop-filter: blur(6px);
+  padding: 16px;
+}
+
+.vote-overlay-card {
+  width: min(520px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  border-radius: 20px;
+  border: 1px solid #c5d0c9;
+  background: linear-gradient(170deg, #fcfdfc 0%, #f1f5f1 100%);
+  box-shadow:
+    0 18px 42px rgba(19, 26, 21, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  padding: 20px;
+}
+
+.vote-overlay-card h3 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+
 .tag {
   display: inline-block;
   background: #fee4bf;
@@ -1549,6 +1580,23 @@ button:focus {
     display: block;
   }
 
+  .vote-overlay {
+    align-items: flex-end;
+    background: linear-gradient(to top, rgba(18, 24, 20, 0.50), rgba(18, 24, 20, 0.08));
+    backdrop-filter: none;
+    padding: 0;
+  }
+
+  .vote-overlay-card {
+    width: 100%;
+    max-width: none;
+    max-height: 85dvh;
+    border-radius: 18px 18px 0 0;
+    border-bottom: none;
+    box-shadow: 0 -12px 28px rgba(19, 26, 21, 0.22);
+    padding: 16px 14px 24px;
+  }
+
   .invite-code-grid {
     gap: 6px;
     max-width: none;
@@ -1631,6 +1679,7 @@ body::before {
 .join-drawer,
 .global-overlay-card,
 .whiteboard-drawer-card,
+.vote-overlay-card,
 .vote-record,
 .room-summary {
   background: linear-gradient(160deg, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0.02) 100%);
@@ -1780,13 +1829,15 @@ button:focus {
 }
 
 .join-drawer-overlay,
-.global-overlay {
+.global-overlay,
+.vote-overlay {
   background: rgba(2, 2, 4, 0.78);
 }
 
 .join-drawer,
 .global-overlay-card,
-.whiteboard-drawer-card {
+.whiteboard-drawer-card,
+.vote-overlay-card {
   border-color: rgba(255, 255, 255, 0.12);
 }
 
@@ -2092,7 +2143,8 @@ button:focus {
 .reveal-panel,
 .join-drawer,
 .global-overlay-card,
-.whiteboard-drawer-card {
+.whiteboard-drawer-card,
+.vote-overlay-card {
   border-radius: var(--ds-radius-xl);
 }
 

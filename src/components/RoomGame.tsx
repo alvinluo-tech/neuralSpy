@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -27,6 +27,7 @@ import { trackEvent } from "@/lib/umami";
 import { supabase } from "@/lib/supabase";
 
 import { QRCodeSVG } from "qrcode.react";
+import { VoteOverlay } from "@/components/VoteOverlay";
 
 const SESSION_KEY = "undercover.session.id";
 const WHITEBOARD_COUNT_STORAGE_PREFIX = "undercover.room.whiteboard.count.";
@@ -206,37 +207,6 @@ function GameProgressCard({
       </div>
       <div className="game-progress-track" aria-hidden="true">
         <div className="game-progress-fill" style={{ width: `${progress}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function VoteCountdownRing({ remainingSeconds, totalSeconds }: { remainingSeconds: number; totalSeconds: number }) {
-  const safeTotal = Math.max(1, totalSeconds);
-  const clampedRemaining = Math.max(0, Math.min(remainingSeconds, safeTotal));
-  const percentage = (clampedRemaining / safeTotal) * 100;
-  const radius = 44;
-  const circumference = 2 * Math.PI * radius;
-  const isUrgent = clampedRemaining <= 10;
-
-  return (
-    <div className="vote-countdown" role="timer" aria-live="polite" aria-label={`剩余 ${clampedRemaining} 秒`}>
-      <svg viewBox="0 0 100 100" className="vote-countdown-svg" aria-hidden="true">
-        <circle cx="50" cy="50" r={radius} className="vote-countdown-bg" />
-        <circle
-          cx="50"
-          cy="50"
-          r={radius}
-          className={`vote-countdown-fg${isUrgent ? " urgent" : ""}`}
-          style={{
-            strokeDasharray: circumference,
-            strokeDashoffset: circumference * (1 - percentage / 100),
-          }}
-        />
-      </svg>
-      <div className="vote-countdown-text">
-        <strong>{clampedRemaining}</strong>
-        <span>秒</span>
       </div>
     </div>
   );
@@ -488,6 +458,16 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
     voteCandidateIds.length === 0
       ? []
       : alivePlayers.filter((player) => voteCandidateIds.includes(player.id));
+  const tieCandidateDisplayNames = tieCandidatePlayers.map(
+    (p) => `玩家${p.seat_no} ${p.name}`
+  );
+  const handleCastVote = useCallback(async () => {
+    if (!canSubmitVote || roomLogic.busy) return;
+    const ok = await roomLogic.castVote(roomId, voteTargetId, voteScopePlayers);
+    if (ok) {
+      setVoteSubmitToast(voteTargetId === ABSTAIN_VOTE_VALUE ? "弃票已提交" : "投票已提交");
+    }
+  }, [canSubmitVote, roomLogic, roomId, voteTargetId, voteScopePlayers]);
   const rotatedPlayers =
     players.length <= 1
       ? players
@@ -696,6 +676,12 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
       autoSettleVoteKeyRef.current = null;
     }
   }, [room?.status, room?.round_number, room?.vote_round]);
+
+  useEffect(() => {
+    if (room?.status !== "voting") {
+      setVoteTargetId("");
+    }
+  }, [room?.status]);
 
   if (!sessionId || roomLoading) {
     return (
@@ -946,7 +932,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                           setRoomCategorySearchOpen(false);
                         }}
                       >
-                        使用“{roomCategoryInputValue.trim()}”作为自定义类别
+                        使用"{roomCategoryInputValue.trim()}"作为自定义类别
                       </Button>
                     )}
                   </div>
@@ -1321,88 +1307,32 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
               </AnimatePresence>
             </motion.ul>
 
-            {room.vote_enabled && room.status === "voting" && currentPlayer && (
-              <div className="vote-box acet-card-lift">
-                <div className="vote-head-row">
-                  <h3>本轮投票</h3>
-                  <p className="hint vote-head-count">
-                    已投票人数：{votedCount}/{eligibleVoters.length}
-                  </p>
-                </div>
-
-                {voteInlineStatus && <p className="hint vote-inline-hint">{voteInlineStatus}</p>}
-
-                <p className="hint">
-                  请选择一个目标，或选择“弃票”后再提交。
-                </p>
-
-                {remainingVoteSeconds != null && (
-                  <div className="vote-countdown-wrap">
-                    <VoteCountdownRing
-                      remainingSeconds={remainingVoteSeconds}
-                      totalSeconds={Math.max(1, room.vote_duration_seconds ?? 60)}
-                    />
-                  </div>
-                )}
-
-                {room.vote_candidate_ids && room.vote_candidate_ids.length > 0 && (
-                  <p className="hint">
-                    当前为平票加赛：候选人仅限
-                    {tieCandidatePlayers.length > 0
-                      ? ` ${tieCandidatePlayers.map((p) => `玩家${p.seat_no} ${p.name}`).join("、")}`
-                      : " 平票玩家"}
-                    {restrictedTieBreak ? "；仅其余存活玩家可投票。" : "；本轮为全员平票，所有存活玩家可参与复投。"}
-                  </p>
-                )}
-
-                <div>
-                  <p className="vote-candidate-label">选择你怀疑的卧底</p>
-                  <div className="vote-candidate-grid" role="radiogroup" aria-label="投票候选区">
-                    {voteCandidateOptions.map((option) => {
-                      const selected = voteTargetId === option.value;
-                      return (
-                        <Button
-                          key={option.key}
-                          type="button"
-                          variant={selected ? "primary" : "ghost"}
-                          size="sm"
-                          className={`vote-candidate-chip${selected ? " selected" : ""}${option.isAbstain ? " abstain" : ""}`}
-                          disabled={!canCurrentPlayerVote || roomLogic.busy}
-                          aria-pressed={selected}
-                          onClick={() => setVoteTargetId(option.value)}
-                        >
-                          <span className="vote-candidate-title">{option.title}</span>
-                          <span className="vote-candidate-meta">{option.meta}</span>
-                        </Button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                  {canCurrentPlayerVote && !hasVoteSelection && (
-                    <p className="hint vote-gate-hint">请先选择投票对象或“弃票”。</p>
-                  )}
-
-                <Button
-                  type="button"
-                  variant="primary"
-                  className={`${roomLogic.busy ? "loading " : ""}main-next-action`.trim()}
-                  onClick={async () => {
-                    const ok = await roomLogic.castVote(roomId, voteTargetId, voteScopePlayers);
-                    if (ok) {
-                      setVoteSubmitToast(voteTargetId === ABSTAIN_VOTE_VALUE ? "弃票已提交" : "投票已提交");
-                    }
-                  }}
-                  disabled={roomLogic.busy || !canSubmitVote}
-                >
-                  {roomLogic.busy ? "提交中..." : "提交/更新我的投票"}
-                </Button>
-              </div>
-            )}
-
             {displayRoomSummary && <p className="hint room-summary">{displayRoomSummary}</p>}
           </article>
         </section>
+
+        <VoteOverlay
+          open={room.vote_enabled && room.status === "voting" && !!currentPlayer}
+          onClose={() => {}}
+          voteRound={room.vote_round}
+          voteDurationSeconds={room.vote_duration_seconds ?? 60}
+          voteCandidateIds={voteCandidateIds}
+          voteTargetId={voteTargetId}
+          onVoteTargetIdChange={setVoteTargetId}
+          roomLogicBusy={roomLogic.busy}
+          roomSyncing={roomSyncing}
+          votedCount={votedCount}
+          eligibleVoterCount={eligibleVoters.length}
+          canCurrentPlayerVote={canCurrentPlayerVote}
+          canSubmitVote={canSubmitVote}
+          hasVoteSelection={hasVoteSelection}
+          voteInlineStatus={voteInlineStatus}
+          remainingVoteSeconds={remainingVoteSeconds}
+          restrictedTieBreak={restrictedTieBreak}
+          tieCandidateNames={tieCandidateDisplayNames}
+          voteCandidateOptions={voteCandidateOptions}
+          onCastVote={handleCastVote}
+        />
 
         {whiteboardGuessPendingForCurrentPlayer && (
           <div className="whiteboard-drawer" role="dialog" aria-modal="true" aria-label="白板临终猜词">
