@@ -52,6 +52,12 @@ const fail = (status: number, message: string): SettleVoteRoundResponse => ({
   payload: { error: message },
 });
 
+const resolveRoleLabel = (player: PlayerRow): string => {
+  if (player.is_undercover) return "卧底";
+  if (isWhiteboardRole(player)) return "白板";
+  return "平民";
+};
+
 export async function settleVoteRound(input: SettleVoteRoundInput): Promise<SettleVoteRoundResponse> {
   try {
     const supabaseAdmin = input.supabaseAdmin ?? getSupabaseAdmin();
@@ -244,7 +250,8 @@ export async function settleVoteRound(input: SettleVoteRoundInput): Promise<Sett
     const nextPlayers = players.map((player) =>
       player.id === eliminatedId ? { ...player, is_alive: false } : player,
     );
-    const summary = `第 ${room.vote_round} 轮：玩家 ${eliminatedPlayer.seat_no}（${eliminatedPlayer.name}）出局。`;
+    const eliminatedRoleLabel = resolveRoleLabel(eliminatedPlayer);
+    const summary = `第 ${room.vote_round} 轮：玩家 ${eliminatedPlayer.seat_no}（${eliminatedPlayer.name}）出局。身份：${eliminatedRoleLabel}。`;
 
     if (isWhiteboardRole(eliminatedPlayer) && players.length >= 4) {
       const pendingSummary = `${summary} 白板玩家可进行临终猜词。${WHITEBOARD_GUESS_PENDING_MARKER}`;
@@ -273,7 +280,7 @@ export async function settleVoteRound(input: SettleVoteRoundInput): Promise<Sett
         return ok({ ok: true, action: "noop", reason: "already-settled" });
       }
 
-      return ok({ ok: true, action: "whiteboard-guess-pending", eliminatedId });
+      return ok({ ok: true, action: "whiteboard-guess-pending", eliminatedId, eliminatedRole: eliminatedRoleLabel });
     }
 
     const winner = detectWinnerByRole(nextPlayers);
@@ -303,7 +310,7 @@ export async function settleVoteRound(input: SettleVoteRoundInput): Promise<Sett
         return ok({ ok: true, action: "noop", reason: "already-settled" });
       }
 
-      return ok({ ok: true, action: "finished", winner });
+      return ok({ ok: true, action: "finished", winner, eliminatedRole: eliminatedRoleLabel });
     }
 
     const continueRes = await supabaseAdmin
@@ -331,7 +338,7 @@ export async function settleVoteRound(input: SettleVoteRoundInput): Promise<Sett
       return ok({ ok: true, action: "noop", reason: "already-settled" });
     }
 
-    return ok({ ok: true, action: "eliminated", eliminatedId });
+    return ok({ ok: true, action: "eliminated", eliminatedId, eliminatedRole: eliminatedRoleLabel });
   } catch (error) {
     return fail(500, error instanceof Error ? error.message : "Unknown error");
   }

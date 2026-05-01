@@ -57,8 +57,13 @@ const judgeByGroq = async (targetWord: string, guessedWord: string) => {
   }
 
   const prompt = [
-    "你是语义判定器，任务是判断两个中文词是否表达同一事物或同义。",
-    "判断标准：近义词、同指代、口语和正式说法可视为同义；泛化/并列概念视为不同义。",
+    "你是语义判定器，任务是判断两个中文词是否为完全相同的物品。",
+    "判定规则（严格执行）：",
+    "- 仅当两个词指代同一个具体物品/事物时返回 true",
+    "- 近义词但指代不同物品（如'猫'和'老虎'）必须返回 false",
+    "- 泛化/并列概念（如'水果'和'苹果'）必须返回 false",
+    "- 口语和正式说法指代同一物品时可返回 true",
+    "- 不确定时返回 false",
     `词1：${targetWord}`,
     `词2：${guessedWord}`,
     '仅返回 JSON：{"isSameMeaning": true|false, "confidence": 0~1, "reason": "简短理由"}',
@@ -108,7 +113,13 @@ const judgeByGemini = async (targetWord: string, guessedWord: string) => {
   }
 
   const prompt = [
-    "请判断两个中文词是否同义或同指代。",
+    "请判断两个中文词是否为完全相同的物品。",
+    "判定规则（严格执行）：",
+    "- 仅当两个词指代同一个具体物品/事物时返回 true",
+    "- 近义词但指代不同物品（如'猫'和'老虎'）必须返回 false",
+    "- 泛化/并列概念（如'水果'和'苹果'）必须返回 false",
+    "- 口语和正式说法指代同一物品时可返回 true",
+    "- 不确定时返回 false",
     `词1：${targetWord}`,
     `词2：${guessedWord}`,
     '仅返回 JSON：{"isSameMeaning": true|false, "confidence": 0~1, "reason": "简短理由"}',
@@ -242,8 +253,9 @@ export async function POST(
     }
 
     const judged = await semanticMatch(civilianWord, guessedWord, provider);
+    const GUESS_CONFIDENCE_THRESHOLD = 0.7;
 
-    if (judged.isSameMeaning) {
+    if (judged.isSameMeaning && judged.confidence >= GUESS_CONFIDENCE_THRESHOLD) {
       const summary = `${sanitizeRoomSummary(room.result_summary)} 白板玩家 ${currentPlayer.name} 猜词成功，白板单独获胜。`;
       const finishRes = await supabaseAdmin
         .from("rooms")

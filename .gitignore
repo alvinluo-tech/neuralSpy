@@ -40,7 +40,18 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# extra docs
+# IDE / editor local config
+.claude/
+.trae/
+.vscode/
+.copilot_git_status_before.txt
+
+# extra docs & local notes
 design.md
 UI-AI-SPEC.md
 suggestion.md
+progress.md
+steps.md
+analytics-tracking.md
+architecture.md
+design-neuralspy.md

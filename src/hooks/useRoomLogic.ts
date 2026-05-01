@@ -647,7 +647,7 @@ export const useRoomLogic = (
     async (
       roomId: string,
       publishOptions?: { force?: boolean; silentNoop?: boolean }
-    ): Promise<{ ok: boolean; action: string; reason?: string }> => {
+    ): Promise<{ ok: boolean; action: string; reason?: string; eliminatedRole?: string }> => {
       if (!room) return { ok: false, action: "noop", reason: "missing-room" };
 
       setBusy(true);
@@ -669,6 +669,8 @@ export const useRoomLogic = (
           action?: string;
           reason?: string;
           error?: string;
+          eliminatedRole?: string;
+          winner?: string;
         };
 
         if (!response.ok) {
@@ -697,18 +699,20 @@ export const useRoomLogic = (
         }
 
         if (result.action === "finished") {
-          setMessage("投票已自动结算，游戏已结束。");
-          return { ok: true, action: "finished" };
+          const roleInfo = result.eliminatedRole ? `出局玩家身份：${result.eliminatedRole}。` : "";
+          setMessage(`投票已自动结算，游戏已结束。${roleInfo}`);
+          return { ok: true, action: "finished", eliminatedRole: result.eliminatedRole };
         }
 
         if (result.action === "whiteboard-guess-pending") {
-          setMessage("白板已出局，进入临终猜词阶段。请白板玩家提交猜词。");
-          return { ok: true, action: "whiteboard-guess-pending" };
+          setMessage(`白板已出局，进入临终猜词阶段。请白板玩家提交猜词。`);
+          return { ok: true, action: "whiteboard-guess-pending", eliminatedRole: result.eliminatedRole };
         }
 
         if (result.action === "eliminated") {
-          setMessage("投票已自动结算，已淘汰一名玩家。");
-          return { ok: true, action: "eliminated" };
+          const roleInfo = result.eliminatedRole ? `（身份：${result.eliminatedRole}）` : "";
+          setMessage(`投票已自动结算，已淘汰一名玩家${roleInfo}。`);
+          return { ok: true, action: "eliminated", eliminatedRole: result.eliminatedRole };
         }
 
         return { ok: false, action: result.action ?? "unknown" };
