@@ -625,6 +625,32 @@ export default function HomePage() {
           {error && <NoticeToast type="error" message={error} onClose={() => setError("")} />}
           {message && <NoticeToast type="success" message={message} onClose={() => setMessage("")} />}
         </div>
+
+        {process.env.NODE_ENV === "development" && (
+          <motion.section
+            className="panel"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.42, delay: 0.3, ease: "easeOut" }}
+            style={{ marginTop: 24, border: "1px dashed var(--primary, #4ade80)" }}
+          >
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div className="text-sm tracking-[0.14em] uppercase text-[color:var(--primary)] font-bold">
+                  Dev Tools
+                </div>
+                <div className="text-sm text-[color:var(--muted)] mt-1">白板猜词 AI 判定测试工具</div>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => router.push("/dev/whiteboard-test")}
+              >
+                打开测试
+              </Button>
+            </div>
+          </motion.section>
+        )}
       </main>
     </div>
   );

@@ -1351,7 +1351,7 @@ export function RoomGame({ roomId, pageType }: RoomGameProps) {
                   variant="primary"
                   className={roomLogic.busy ? "loading" : undefined}
                   disabled={roomLogic.busy || !whiteboardGuess.trim()}
-                  onClick={() => roomLogic.submitWhiteboardGuess(roomId, whiteboardGuess, "grok")}
+                  onClick={() => roomLogic.submitWhiteboardGuess(roomId, whiteboardGuess)}
                 >
                   {roomLogic.busy ? "提交中..." : "提交猜词"}
                 </Button>

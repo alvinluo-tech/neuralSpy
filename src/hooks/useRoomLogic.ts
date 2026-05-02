@@ -728,7 +728,7 @@ export const useRoomLogic = (
   );
 
   const submitWhiteboardGuess = useCallback(
-    async (roomId: string, guess: string, provider: "grok" | "gemini" = "grok"): Promise<boolean> => {
+    async (roomId: string, guess: string): Promise<boolean> => {
       if (!room || !currentPlayer) return false;
 
       const normalizedGuess = guess.trim();
@@ -747,7 +747,6 @@ export const useRoomLogic = (
           body: JSON.stringify({
             playerId: currentPlayer.id,
             guess: normalizedGuess,
-            provider,
           }),
         });
 

@@ -7,8 +7,6 @@ import {
 } from "@/lib/gameEngine";
 import { getSupabaseAdmin } from "@/lib/server/supabaseAdmin";
 
-type JudgeProvider = "grok" | "gemini";
-
 type RoomRow = {
   id: string;
   status: "lobby" | "playing" | "voting" | "finished";
@@ -25,164 +23,6 @@ type PlayerRow = {
   current_word: string | null;
 };
 
-const parseBooleanFromModelContent = (content: string) => {
-  const jsonCandidate = content.match(/\{[\s\S]*\}/)?.[0] ?? content;
-  try {
-    const parsed = JSON.parse(jsonCandidate) as {
-      isSameMeaning?: boolean;
-      confidence?: number;
-      reason?: string;
-    };
-    return {
-      isSameMeaning: parsed.isSameMeaning === true,
-      confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
-      reason: parsed.reason ?? "",
-    };
-  } catch {
-    return {
-      isSameMeaning: false,
-      confidence: 0,
-      reason: "模型响应解析失败",
-    };
-  }
-};
-
-const judgeByGroq = async (targetWord: string, guessedWord: string) => {
-  const apiKey = process.env.GROQ_API_KEY;
-  const apiUrl = process.env.GROQ_API_URL ?? "https://api.groq.com/openai/v1/chat/completions";
-  const model = process.env.GROQ_MODEL ?? "qwen/qwen3-32b";
-
-  if (!apiKey) {
-    throw new Error("缺少 GROQ_API_KEY，无法执行白板猜词判定。");
-  }
-
-  const prompt = [
-    "你是语义判定器，任务是判断两个中文词是否为完全相同的物品。",
-    "判定规则（严格执行）：",
-    "- 仅当两个词指代同一个具体物品/事物时返回 true",
-    "- 近义词但指代不同物品（如'猫'和'老虎'）必须返回 false",
-    "- 泛化/并列概念（如'水果'和'苹果'）必须返回 false",
-    "- 口语和正式说法指代同一物品时可返回 true",
-    "- 不确定时返回 false",
-    `词1：${targetWord}`,
-    `词2：${guessedWord}`,
-    '仅返回 JSON：{"isSameMeaning": true|false, "confidence": 0~1, "reason": "简短理由"}',
-  ].join("\n");
-
-  const response = await fetch(apiUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.1,
-      stream: false,
-      messages: [
-        { role: "system", content: "你只输出可解析 JSON。" },
-        { role: "user", content: prompt },
-      ],
-    }),
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Groq 判定失败（${response.status}）：${errorText.slice(0, 240)}`);
-  }
-
-  const payload = (await response.json()) as {
-    choices?: Array<{
-      message?: {
-        content?: string;
-      };
-    }>;
-  };
-
-  const content = payload.choices?.[0]?.message?.content ?? "";
-  return parseBooleanFromModelContent(content);
-};
-
-const judgeByGemini = async (targetWord: string, guessedWord: string) => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  const model = process.env.GEMINI_MODEL ?? "gemini-2.0-flash";
-
-  if (!apiKey) {
-    throw new Error("缺少 GEMINI_API_KEY，无法执行 Gemini 判定。");
-  }
-
-  const prompt = [
-    "请判断两个中文词是否为完全相同的物品。",
-    "判定规则（严格执行）：",
-    "- 仅当两个词指代同一个具体物品/事物时返回 true",
-    "- 近义词但指代不同物品（如'猫'和'老虎'）必须返回 false",
-    "- 泛化/并列概念（如'水果'和'苹果'）必须返回 false",
-    "- 口语和正式说法指代同一物品时可返回 true",
-    "- 不确定时返回 false",
-    `词1：${targetWord}`,
-    `词2：${guessedWord}`,
-    '仅返回 JSON：{"isSameMeaning": true|false, "confidence": 0~1, "reason": "简短理由"}',
-  ].join("\n");
-
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: "application/json",
-        },
-      }),
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Gemini 判定失败（${response.status}）：${errorText.slice(0, 240)}`);
-  }
-
-  const payload = (await response.json()) as {
-    candidates?: Array<{
-      content?: {
-        parts?: Array<{ text?: string }>;
-      };
-    }>;
-  };
-
-  const content = payload.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-  return parseBooleanFromModelContent(content);
-};
-
-const semanticMatch = async (
-  targetWord: string,
-  guessedWord: string,
-  provider: JudgeProvider,
-) => {
-  const normalizedTarget = targetWord.trim().toLowerCase();
-  const normalizedGuess = guessedWord.trim().toLowerCase();
-
-  if (!normalizedTarget || !normalizedGuess) {
-    return { isSameMeaning: false, confidence: 0, reason: "空词" };
-  }
-
-  if (normalizedTarget === normalizedGuess) {
-    return { isSameMeaning: true, confidence: 1, reason: "完全一致" };
-  }
-
-  if (provider === "gemini") {
-    return judgeByGemini(targetWord, guessedWord);
-  }
-
-  return judgeByGroq(targetWord, guessedWord);
-};
-
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ roomId: string }> },
@@ -194,12 +34,10 @@ export async function POST(
     const body = (await request.json().catch(() => ({}))) as {
       playerId?: string;
       guess?: string;
-      provider?: JudgeProvider;
     };
 
     const playerId = body.playerId?.trim();
     const guessedWord = body.guess?.trim();
-    const provider: JudgeProvider = body.provider === "gemini" ? "gemini" : "grok";
 
     if (!playerId || !guessedWord) {
       return NextResponse.json({ error: "缺少 playerId 或 guess。" }, { status: 400 });
@@ -252,10 +90,9 @@ export async function POST(
       return NextResponse.json({ error: "无法获取平民词。" }, { status: 500 });
     }
 
-    const judged = await semanticMatch(civilianWord, guessedWord, provider);
-    const GUESS_CONFIDENCE_THRESHOLD = 0.7;
+    const isCorrect = guessedWord.toLowerCase() === civilianWord.toLowerCase();
 
-    if (judged.isSameMeaning && judged.confidence >= GUESS_CONFIDENCE_THRESHOLD) {
+    if (isCorrect) {
       const summary = `${sanitizeRoomSummary(room.result_summary)} 白板玩家 ${currentPlayer.name} 猜词成功，白板单独获胜。`;
       const finishRes = await supabaseAdmin
         .from("rooms")
@@ -272,12 +109,7 @@ export async function POST(
         return NextResponse.json({ error: finishRes.error.message }, { status: 500 });
       }
 
-      return NextResponse.json({
-        ok: true,
-        action: "whiteboard-solo-win",
-        confidence: judged.confidence,
-        reason: judged.reason,
-      });
+      return NextResponse.json({ ok: true, action: "whiteboard-solo-win" });
     }
 
     const winner = detectWinnerByRole(players);
@@ -302,8 +134,6 @@ export async function POST(
       ok: true,
       action: "whiteboard-guess-failed",
       winner: winner ?? null,
-      confidence: judged.confidence,
-      reason: judged.reason,
     });
   } catch (error) {
     return NextResponse.json(
