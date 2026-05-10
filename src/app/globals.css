@@ -1740,24 +1740,28 @@ label {
 input,
 select,
 textarea {
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
   color: #eef0f4;
   border-radius: 10px;
   padding: 10px 12px;
+  min-height: 44px;
 }
 
 input::placeholder,
 textarea::placeholder {
-  color: #6f7580;
+  color: #8a92a0;
 }
 
 input:focus,
 select:focus,
 textarea:focus,
 button:focus {
-  outline: 2px solid rgba(130, 143, 255, 0.45);
+  outline: 2px solid rgba(130, 143, 255, 0.6);
   outline-offset: 2px;
+  border-color: rgba(130, 143, 255, 0.5);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 3px rgba(130, 143, 255, 0.15);
 }
 
 .btn {
@@ -1846,10 +1850,10 @@ button:focus {
 }
 
 .invite-code-cell {
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.06);
   color: #f4f6f8;
-  box-shadow: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
 .invite-code-cell.filled {
@@ -2104,6 +2108,20 @@ button:focus {
 
   .home-flow-item {
     gap: 10px;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+    min-height: 48px;
+    padding: 12px 14px;
+  }
+
+  .invite-code-cell {
+    min-height: 48px;
+    font-size: clamp(1.1rem, 3.5vw, 1.4rem);
+    padding: 14px 0;
   }
 }
 
